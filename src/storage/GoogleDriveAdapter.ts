@@ -1,0 +1,240 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { DRIVE_FOLDER_NAME, OUTBOX_FILENAME, OUTBOX_VERSION, STORAGE_KEYS, publicDownloadUrl } from '../shared/constants';
+import { MessageManifest, Outbox, OutboxEntry } from '../shared/types';
+import {
+  DriveFile,
+  executeResumableUpload,
+  fetchPublicJson,
+  getOrCreateAppFolder,
+  getOrCreateSubfolder,
+  initiateResumableUpload,
+  shareFilePublic,
+  updateJsonFile,
+  uploadJsonFile,
+} from './driveApi';
+import { StorageAdapter } from './StorageAdapter';
+import { enqueueOutboxWrite } from './outboxQueue';
+
+export class GoogleDriveAdapter implements StorageAdapter {
+  private readonly userSub: string;
+  private readonly userEmail: string;
+  private readonly userName: string;
+  private accessToken: string;
+
+  /** Cached Drive file ID for outbox.json */
+  private outboxFileId: string | null = null;
+  /** Cached root folder ID */
+  private folderId: string | null = null;
+
+  constructor(opts: {
+    userSub: string;
+    userEmail: string;
+    userName: string;
+    accessToken: string;
+  }) {
+    this.userSub = opts.userSub;
+    this.userEmail = opts.userEmail;
+    this.userName = opts.userName;
+    this.accessToken = opts.accessToken;
+  }
+
+  /** Call after token refresh to keep the adapter current. */
+  updateAccessToken(token: string): void {
+    this.accessToken = token;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Initialization
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Ensure the /OffMyChest folder and outbox.json exist in Drive.
+   * Safe to call on every app launch — searches before creating.
+   * Returns the public URL of outbox.json.
+   */
+  async initialize(): Promise<string> {
+    const folder = await this.getOrCacheFolder();
+    const outboxUrl = await this.getOrCreateOutbox(folder.id);
+    return outboxUrl;
+  }
+
+  private async getOrCacheFolder(): Promise<DriveFile> {
+    // Check AsyncStorage cache
+    const cached = await AsyncStorage.getItem(STORAGE_KEYS.driveFolderId(this.userSub));
+    if (cached) {
+      this.folderId = cached;
+      return { id: cached, name: DRIVE_FOLDER_NAME };
+    }
+
+    // Search Drive (handles reinstall)
+    const folder = await getOrCreateAppFolder(DRIVE_FOLDER_NAME, this.accessToken);
+    this.folderId = folder.id;
+    await AsyncStorage.setItem(STORAGE_KEYS.driveFolderId(this.userSub), folder.id);
+    return folder;
+  }
+
+  private async getOrCreateOutbox(folderId: string): Promise<string> {
+    // Check AsyncStorage for existing outbox file ID + URL
+    const [existingFileId, existingUrl] = await Promise.all([
+      AsyncStorage.getItem(STORAGE_KEYS.driveOutboxFileId(this.userSub)),
+      AsyncStorage.getItem(STORAGE_KEYS.driveOutboxPublicUrl(this.userSub)),
+    ]);
+
+    if (existingFileId && existingUrl) {
+      this.outboxFileId = existingFileId;
+      return existingUrl;
+    }
+
+    // Create fresh outbox.json
+    const emptyOutbox: Outbox = {
+      version: OUTBOX_VERSION,
+      owner: this.userName,
+      owner_email: this.userEmail,
+      updated_at: new Date().toISOString(),
+      messages: [],
+    };
+
+    const file = await uploadJsonFile(OUTBOX_FILENAME, emptyOutbox, folderId, this.accessToken);
+    const publicUrl = await shareFilePublic(file.id, this.accessToken);
+
+    this.outboxFileId = file.id;
+    await Promise.all([
+      AsyncStorage.setItem(STORAGE_KEYS.driveOutboxFileId(this.userSub), file.id),
+      AsyncStorage.setItem(STORAGE_KEYS.driveOutboxPublicUrl(this.userSub), publicUrl),
+    ]);
+
+    return publicUrl;
+  }
+
+  // ---------------------------------------------------------------------------
+  // StorageAdapter implementation
+  // ---------------------------------------------------------------------------
+
+  async uploadChunk(
+    threadId: string,
+    messageId: string,
+    chunkIndex: number,
+    data: Uint8Array,
+  ): Promise<string> {
+    const folderId = await this.ensureFolderId();
+    const chunkFolder = await this.ensureSubfolder(`threads/${threadId}/${messageId}/chunks`, folderId);
+    const filename = `chunk_${String(chunkIndex).padStart(3, '0')}.mp4`;
+
+    const sessionUri = await initiateResumableUpload(
+      filename,
+      'video/mp4',
+      chunkFolder,
+      this.accessToken,
+    );
+    const file = await executeResumableUpload(sessionUri, data, 'video/mp4');
+    return shareFilePublic(file.id, this.accessToken);
+  }
+
+  async uploadManifest(
+    threadId: string,
+    messageId: string,
+    manifest: MessageManifest,
+  ): Promise<string> {
+    const folderId = await this.ensureFolderId();
+    const msgFolderId = await this.ensureSubfolder(`threads/${threadId}/${messageId}`, folderId);
+
+    const file = await uploadJsonFile('manifest.json', manifest, msgFolderId, this.accessToken);
+    return shareFilePublic(file.id, this.accessToken);
+  }
+
+  async uploadThumbnail(
+    threadId: string,
+    messageId: string,
+    image: Uint8Array,
+  ): Promise<string> {
+    const folderId = await this.ensureFolderId();
+    const msgFolderId = await this.ensureSubfolder(`threads/${threadId}/${messageId}`, folderId);
+
+    const sessionUri = await initiateResumableUpload(
+      'thumb.jpg',
+      'image/jpeg',
+      msgFolderId,
+      this.accessToken,
+    );
+    const file = await executeResumableUpload(sessionUri, image, 'image/jpeg');
+    return shareFilePublic(file.id, this.accessToken);
+  }
+
+  async getManifest(url: string): Promise<MessageManifest> {
+    return fetchPublicJson<MessageManifest>(url);
+  }
+
+  async getChunkUrl(baseUrl: string, chunkPath: string): Promise<string> {
+    // Chunks are already public URLs stored in the manifest — just return them.
+    // The baseUrl + chunkPath combination is only used for manifest-based resolution
+    // in future providers; for Drive, chunk URLs are absolute public links.
+    return `${baseUrl}${chunkPath}`;
+  }
+
+  async updateOutbox(entry: OutboxEntry): Promise<void> {
+    return enqueueOutboxWrite(async () => {
+      const outboxUrl = await AsyncStorage.getItem(
+        STORAGE_KEYS.driveOutboxPublicUrl(this.userSub),
+      );
+      if (!outboxUrl || !this.outboxFileId) {
+        throw new Error('Outbox not initialized — call initialize() first');
+      }
+
+      // Fetch latest to avoid stomping concurrent writes from other devices
+      const current = await fetchPublicJson<Outbox>(outboxUrl);
+
+      // De-duplicate by message_id then append
+      const existing = new Set(current.messages.map((m) => m.message_id));
+      if (!existing.has(entry.message_id)) {
+        current.messages.push(entry);
+      }
+      current.updated_at = new Date().toISOString();
+
+      await updateJsonFile(this.outboxFileId, current, this.accessToken);
+    });
+  }
+
+  async readOwnOutbox(): Promise<Outbox> {
+    const outboxUrl = await AsyncStorage.getItem(
+      STORAGE_KEYS.driveOutboxPublicUrl(this.userSub),
+    );
+    if (!outboxUrl) throw new Error('Outbox not initialized');
+    return fetchPublicJson<Outbox>(outboxUrl);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal helpers
+  // ---------------------------------------------------------------------------
+
+  private async ensureFolderId(): Promise<string> {
+    if (this.folderId) return this.folderId;
+    const cached = await AsyncStorage.getItem(STORAGE_KEYS.driveFolderId(this.userSub));
+    if (cached) {
+      this.folderId = cached;
+      return cached;
+    }
+    const folder = await this.getOrCacheFolder();
+    return folder.id;
+  }
+
+  /**
+   * Ensure a nested subfolder path exists under a parent folder.
+   * Creates intermediate folders as needed.
+   * Returns the final folder's Drive file ID.
+   *
+   * Note: Drive has no path concept — folders are files with a parent reference.
+   * Each path segment is resolved in sequence.
+   */
+  private async ensureSubfolder(path: string, rootFolderId: string): Promise<string> {
+    const segments = path.split('/');
+    let currentParentId = rootFolderId;
+
+    for (const segment of segments) {
+      const folder = await getOrCreateSubfolder(segment, currentParentId, this.accessToken);
+      currentParentId = folder.id;
+    }
+
+    return currentParentId;
+  }
+}
