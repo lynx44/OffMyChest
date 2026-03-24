@@ -1,7 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
-import { type TokenResponse } from 'expo-auth-session';
+import { type TokenResponse, makeRedirectUri } from 'expo-auth-session';
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 import { GOOGLE_CLIENT_IDS, GOOGLE_SCOPES, SECURE_KEYS } from '../shared/constants';
@@ -33,11 +33,15 @@ export function GoogleAuthProvider({ children }: { children: React.ReactNode }) 
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Expo auth proxy — required for Google OAuth in Expo Go.
+  // For production dev builds, replace with: makeRedirectUri() which uses offmychest://
+  const redirectUri = 'https://auth.expo.io/@mclifton/offmychest';
+
   const [request, response, promptAsync] = Google.useAuthRequest({
-    iosClientId: GOOGLE_CLIENT_IDS.ios,
     androidClientId: GOOGLE_CLIENT_IDS.android,
     webClientId: GOOGLE_CLIENT_IDS.web,
     scopes: GOOGLE_SCOPES,
+    redirectUri,
   });
 
   // ---------------------------------------------------------------------------
