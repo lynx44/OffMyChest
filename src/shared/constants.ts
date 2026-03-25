@@ -26,12 +26,12 @@ export const STORAGE_KEYS = {
 
 // SecureStore keys
 export const SECURE_KEYS = {
-  accessToken: 'auth:accessToken',
-  refreshToken: 'auth:refreshToken',
-  tokenExpiry: 'auth:tokenExpiry',
-  userSub: 'auth:sub',
-  userEmail: 'auth:email',
-  userName: 'auth:name',
+  accessToken: 'auth.accessToken',
+  refreshToken: 'auth.refreshToken',
+  tokenExpiry: 'auth.tokenExpiry',
+  userSub: 'auth.sub',
+  userEmail: 'auth.email',
+  userName: 'auth.name',
 } as const;
 
 // Google OAuth — populated from env

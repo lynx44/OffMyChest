@@ -15,14 +15,14 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.offmychest.app",
+      "bundleIdentifier": "com.pnwtechexperts.offmychest",
       "infoPlist": {
         "NSCameraUsageDescription": "Off My Chest needs camera access to record video messages.",
         "NSMicrophoneUsageDescription": "Off My Chest needs microphone access to record video messages."
       }
     },
     "android": {
-      "package": "com.offmychest.app",
+      "package": "com.pnwtechexperts.offmychest",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -42,8 +42,13 @@
     },
     "plugins": [
       "expo-router",
-      "expo-web-browser",
       "expo-secure-store",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.109450000006-dloo2qgqtoob0s5c0dr87jmjoerivign"
+        }
+      ],
       [
         "expo-camera",
         {
