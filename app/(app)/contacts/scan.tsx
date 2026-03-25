@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { Button, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '../../../src/auth/GoogleAuthProvider';
-import { addContact } from '../../../src/contacts/contactStore';
+import { addContact, resolveContactEmail } from '../../../src/contacts/contactStore';
 
 export default function ScanScreen() {
   const { user } = useAuth();
@@ -47,6 +47,9 @@ export default function ScanScreen() {
         added_at: new Date().toISOString(),
         last_seen_updated_at: null,
       });
+
+      // Resolve real email in background — don't block navigation
+      resolveContactEmail(user.sub, outboxUrl);
 
       setScanned(false);
       router.replace('/(app)/contacts');
