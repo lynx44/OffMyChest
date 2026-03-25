@@ -8,14 +8,13 @@ export default function ConversationScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.placeholder}>Conversation {threadId}</Text>
-      <Text style={styles.hint}>Messages will appear here in Slice 4.</Text>
+      <Text style={styles.hint}>Messages will appear here soon.</Text>
 
       <TouchableOpacity
         style={styles.recordButton}
         onPress={() => router.push(`/(app)/conversations/${threadId}/record`)}
       >
-        <Text style={styles.recordButtonText}>Record Message</Text>
+        <Text style={styles.recordButtonText}>⏺  Record Message</Text>
       </TouchableOpacity>
     </View>
   );
@@ -23,7 +22,6 @@ export default function ConversationScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  placeholder: { fontSize: 18, fontWeight: '600', color: '#aaa' },
   hint: { fontSize: 14, color: '#bbb' },
   recordButton: {
     marginTop: 24,

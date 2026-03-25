@@ -4,9 +4,7 @@
  * after recording stops to drain the queue before finalizing.
  */
 
-import { readAsStringAsync } from 'expo-file-system';
-
-import { CHUNK_DURATION_SECONDS, OUTBOX_VERSION } from '../shared/constants';
+import { OUTBOX_VERSION } from '../shared/constants';
 import { MessageManifest, OutboxEntry } from '../shared/types';
 import { StorageAdapter } from '../storage/StorageAdapter';
 import { updateDraftChunks, updateDraftStatus, clearDraft } from './draftStore';
@@ -40,15 +38,21 @@ export class ChunkUploader {
   }
 
   private async uploadChunkInternal(index: number, fileUri: string): Promise<UploadedChunk> {
-    const bytes = await readFileBytes(fileUri);
-    const publicUrl = await this.adapter.uploadChunk(
-      this.session.threadId,
-      this.session.messageId,
-      index,
-      bytes,
-    );
-    await updateDraftChunks(this.session.messageId, publicUrl);
-    return { index, publicUrl };
+    try {
+      console.log(`[Upload] chunk ${index} uploading from ${fileUri}`);
+      const publicUrl = await this.adapter.uploadChunk(
+        this.session.threadId,
+        this.session.messageId,
+        index,
+        fileUri,
+      );
+      console.log(`[Upload] chunk ${index} done: ${publicUrl}`);
+      await updateDraftChunks(this.session.messageId, publicUrl);
+      return { index, publicUrl };
+    } catch (err) {
+      console.error(`[Upload] chunk ${index} FAILED:`, err);
+      throw err;
+    }
   }
 
   /**
@@ -75,11 +79,11 @@ export class ChunkUploader {
     let thumbnailUrl = '';
     if (this.firstChunkUri) {
       try {
-        const thumbBytes = await captureThumbnail(this.firstChunkUri);
+        const thumbUri = await captureThumbnail(this.firstChunkUri);
         thumbnailUrl = await this.adapter.uploadThumbnail(
           this.session.threadId,
           this.session.messageId,
-          thumbBytes,
+          thumbUri,
         );
       } catch (err) {
         console.warn('Thumbnail capture failed, continuing without it:', err);
@@ -122,12 +126,3 @@ export class ChunkUploader {
   }
 }
 
-async function readFileBytes(fileUri: string): Promise<Uint8Array> {
-  const base64 = await readAsStringAsync(fileUri, { encoding: 'base64' });
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}

@@ -280,13 +280,15 @@ export async function executeResumableUpload(
   data: Uint8Array,
   mimeType: string,
 ): Promise<DriveFile> {
+  // Slice to own buffer in case the Uint8Array is a subview (avoids sending extra bytes)
+  const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
   const res = await fetch(sessionUri, {
     method: 'PUT',
     headers: {
       'Content-Type': mimeType,
       'Content-Length': String(data.byteLength),
     },
-    body: data.buffer as ArrayBuffer,
+    body: buffer,
   });
 
   if (!res.ok) {

@@ -1,10 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 
 import { DRIVE_FOLDER_NAME, OUTBOX_FILENAME, OUTBOX_VERSION, STORAGE_KEYS, publicDownloadUrl } from '../shared/constants';
 import { MessageManifest, Outbox, OutboxEntry } from '../shared/types';
+import { DriveApiError } from '../shared/errors';
 import {
   DriveFile,
-  executeResumableUpload,
   fetchPublicJson,
   getOrCreateAppFolder,
   getOrCreateSubfolder,
@@ -115,19 +116,22 @@ export class GoogleDriveAdapter implements StorageAdapter {
     threadId: string,
     messageId: string,
     chunkIndex: number,
-    data: Uint8Array,
+    fileUri: string,
   ): Promise<string> {
     const folderId = await this.ensureFolderId();
-    const chunkFolder = await this.ensureSubfolder(`threads/${threadId}/${messageId}/chunks`, folderId);
+    const chunkFolderId = await this.ensureSubfolder(
+      `threads/${threadId}/${messageId}/chunks`,
+      folderId,
+    );
     const filename = `chunk_${String(chunkIndex).padStart(3, '0')}.mp4`;
 
     const sessionUri = await initiateResumableUpload(
       filename,
       'video/mp4',
-      chunkFolder,
+      chunkFolderId,
       this.accessToken,
     );
-    const file = await executeResumableUpload(sessionUri, data, 'video/mp4');
+    const file = await uploadFileViaSession(sessionUri, fileUri, 'video/mp4');
     return shareFilePublic(file.id, this.accessToken);
   }
 
@@ -146,7 +150,7 @@ export class GoogleDriveAdapter implements StorageAdapter {
   async uploadThumbnail(
     threadId: string,
     messageId: string,
-    image: Uint8Array,
+    imageUri: string,
   ): Promise<string> {
     const folderId = await this.ensureFolderId();
     const msgFolderId = await this.ensureSubfolder(`threads/${threadId}/${messageId}`, folderId);
@@ -157,7 +161,7 @@ export class GoogleDriveAdapter implements StorageAdapter {
       msgFolderId,
       this.accessToken,
     );
-    const file = await executeResumableUpload(sessionUri, image, 'image/jpeg');
+    const file = await uploadFileViaSession(sessionUri, imageUri, 'image/jpeg');
     return shareFilePublic(file.id, this.accessToken);
   }
 
@@ -174,9 +178,11 @@ export class GoogleDriveAdapter implements StorageAdapter {
 
   async updateOutbox(entry: OutboxEntry): Promise<void> {
     return enqueueOutboxWrite(async () => {
-      const outboxUrl = await AsyncStorage.getItem(
-        STORAGE_KEYS.driveOutboxPublicUrl(this.userSub),
-      );
+      const [outboxUrl, cachedFileId] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEYS.driveOutboxPublicUrl(this.userSub)),
+        AsyncStorage.getItem(STORAGE_KEYS.driveOutboxFileId(this.userSub)),
+      ]);
+      if (cachedFileId) this.outboxFileId = cachedFileId;
       if (!outboxUrl || !this.outboxFileId) {
         throw new Error('Outbox not initialized — call initialize() first');
       }
@@ -236,5 +242,36 @@ export class GoogleDriveAdapter implements StorageAdapter {
     }
 
     return currentParentId;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helper — streams a local file to a Drive resumable session URI
+// Uses expo-file-system uploadAsync to avoid binary body issues with fetch.
+// ---------------------------------------------------------------------------
+
+async function uploadFileViaSession(
+  sessionUri: string,
+  localFileUri: string,
+  mimeType: string,
+): Promise<DriveFile> {
+  const result = await uploadAsync(sessionUri, localFileUri, {
+    httpMethod: 'PUT',
+    uploadType: FileSystemUploadType.BINARY_CONTENT,
+    headers: { 'Content-Type': mimeType },
+  });
+
+  if (result.status < 200 || result.status >= 300) {
+    throw new DriveApiError(
+      `File upload failed (${result.status})`,
+      result.status,
+      result.body,
+    );
+  }
+
+  try {
+    return JSON.parse(result.body) as DriveFile;
+  } catch {
+    throw new DriveApiError('Failed to parse Drive upload response', result.status, result.body);
   }
 }

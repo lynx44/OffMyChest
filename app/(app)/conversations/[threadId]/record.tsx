@@ -1,5 +1,5 @@
 import * as Crypto from 'expo-crypto';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -28,6 +28,7 @@ export default function RecordScreen() {
   const router = useRouter();
 
   const [permission, requestPermission] = useCameraPermissions();
+  const [micPermission, requestMicPermission] = useMicrophonePermissions();
   const [status, setStatus] = useState<RecordingStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -38,18 +39,22 @@ export default function RecordScreen() {
   const uploaderRef = useRef<ChunkUploader | null>(null);
   const startTimeRef = useRef<number>(0);
 
-  // Permission not yet resolved
-  if (!permission) {
+  // Permissions not yet resolved
+  if (!permission || !micPermission) {
     return <View style={styles.container} />;
   }
 
-  if (!permission.granted) {
+  if (!permission.granted || !micPermission.granted) {
+    async function requestAll() {
+      if (!permission?.granted) await requestPermission();
+      if (!micPermission?.granted) await requestMicPermission();
+    }
     return (
       <View style={styles.container}>
         <Text style={styles.permissionText}>
           Camera and microphone access is required to record messages.
         </Text>
-        <Button title="Grant Permission" onPress={requestPermission} />
+        <Button title="Grant Permission" onPress={requestAll} />
         <TouchableOpacity onPress={() => router.back()}>
           <Text style={styles.cancelLink}>Cancel</Text>
         </TouchableOpacity>
@@ -99,10 +104,8 @@ export default function RecordScreen() {
     if (status !== 'recording') return;
 
     setStatus('stopping');
-    stopRecording();
-
-    // Wait a tick for the final chunk promise to be enqueued
-    await new Promise((r) => setTimeout(r, 100));
+    // Await ensures the final chunk callback has fired before we finalize
+    await stopRecording();
 
     await finalize();
   }
@@ -126,7 +129,8 @@ export default function RecordScreen() {
       router.back();
     } catch (err) {
       console.error('Finalize failed:', err);
-      setErrorMessage('Upload failed. Your draft has been saved — you can resume later.');
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(`Upload failed: ${msg}`);
       setStatus('error');
     }
   }

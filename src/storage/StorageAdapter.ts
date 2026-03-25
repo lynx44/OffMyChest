@@ -6,12 +6,12 @@ import { MessageManifest, Outbox, OutboxEntry } from '../shared/types';
  * Future providers (OneDrive, S3, etc.) implement this interface.
  */
 export interface StorageAdapter {
-  /** Upload a video chunk. Returns the public download URL. */
+  /** Upload a video chunk from a local file URI. Returns the public download URL. */
   uploadChunk(
     threadId: string,
     messageId: string,
     chunkIndex: number,
-    data: Uint8Array,
+    fileUri: string,
   ): Promise<string>;
 
   /** Upload a message manifest JSON. Returns the public download URL. */
@@ -21,11 +21,11 @@ export interface StorageAdapter {
     manifest: MessageManifest,
   ): Promise<string>;
 
-  /** Upload a thumbnail image. Returns the public download URL. */
+  /** Upload a thumbnail from a local file URI. Returns the public download URL. */
   uploadThumbnail(
     threadId: string,
     messageId: string,
-    image: Uint8Array,
+    imageUri: string,
   ): Promise<string>;
 
   /** Fetch a manifest from any public URL. */

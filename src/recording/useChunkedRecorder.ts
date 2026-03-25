@@ -24,7 +24,8 @@ export interface ChunkedRecorderState {
 export interface ChunkedRecorderControls {
   cameraRef: React.RefObject<CameraView | null>;
   startRecording: (onChunkReady: (index: number, uri: string) => void) => void;
-  stopRecording: () => void;
+  /** Stops recording and returns a Promise that resolves once the final chunk callback has fired. */
+  stopRecording: () => Promise<void>;
   state: ChunkedRecorderState;
 }
 
@@ -34,6 +35,8 @@ export function useChunkedRecorder(): ChunkedRecorderControls {
   const chunkIndexRef = useRef(0);
   const onChunkReadyRef = useRef<((index: number, uri: string) => void) | null>(null);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Resolves when the final chunk's callback has been called (or recording aborted). */
+  const stopResolveRef = useRef<(() => void) | null>(null);
 
   const [state, setState] = useState<ChunkedRecorderState>({
     isRecording: false,
@@ -42,7 +45,11 @@ export function useChunkedRecorder(): ChunkedRecorderControls {
   });
 
   const recordNextChunk = useCallback(async () => {
-    if (!cameraRef.current || userStoppedRef.current) return;
+    if (!cameraRef.current || userStoppedRef.current) {
+      stopResolveRef.current?.();
+      stopResolveRef.current = null;
+      return;
+    }
 
     try {
       // recordAsync resolves when maxDuration is hit OR stopRecording() is called
@@ -56,13 +63,19 @@ export function useChunkedRecorder(): ChunkedRecorderControls {
         onChunkReadyRef.current?.(index, result.uri);
       }
 
-      // Auto-restart for the next chunk if user hasn't stopped
       if (!userStoppedRef.current) {
+        // Auto-restart for the next chunk
         recordNextChunk();
+      } else {
+        // Final chunk processed — signal stop is complete
+        stopResolveRef.current?.();
+        stopResolveRef.current = null;
       }
     } catch (err) {
       // Recording was stopped externally or camera was unmounted
       console.warn('Chunk recording ended:', err);
+      stopResolveRef.current?.();
+      stopResolveRef.current = null;
     }
   }, []);
 
@@ -88,7 +101,7 @@ export function useChunkedRecorder(): ChunkedRecorderControls {
     [recordNextChunk],
   );
 
-  const stopRecording = useCallback(() => {
+  const stopRecording = useCallback((): Promise<void> => {
     userStoppedRef.current = true;
 
     if (elapsedTimerRef.current) {
@@ -97,7 +110,20 @@ export function useChunkedRecorder(): ChunkedRecorderControls {
     }
 
     setState((s) => ({ ...s, isRecording: false }));
-    cameraRef.current?.stopRecording();
+
+    return new Promise<void>((resolve) => {
+      stopResolveRef.current = resolve;
+      cameraRef.current?.stopRecording();
+
+      // Safety valve: if the camera never calls back, unblock after 3s
+      setTimeout(() => {
+        if (stopResolveRef.current === resolve) {
+          console.warn('[Recorder] stopRecording timeout — proceeding without final chunk');
+          stopResolveRef.current = null;
+          resolve();
+        }
+      }, 3000);
+    });
   }, []);
 
   return { cameraRef, startRecording, stopRecording, state };
