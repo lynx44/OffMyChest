@@ -14,6 +14,14 @@ export default function ConversationsLayout() {
           headerShown: false,
         }}
       />
+      <Stack.Screen
+        name="[threadId]/play"
+        options={{
+          title: '',
+          presentation: 'fullScreenModal',
+          headerShown: false,
+        }}
+      />
     </Stack>
   );
 }
