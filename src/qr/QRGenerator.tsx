@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 interface Props {
@@ -15,11 +15,21 @@ export function QRGenerator({ outboxUrl, displayName, size = 240 }: Props) {
     `?outbox=${encodeURIComponent(outboxUrl)}` +
     `&name=${encodeURIComponent(displayName)}`;
 
+  function handleShare() {
+    Share.share({
+      message: `Add me on Off My Chest!\n\n${deepLink}`,
+      title: 'Add me on Off My Chest',
+    });
+  }
+
   return (
     <View style={styles.container}>
       <QRCode value={deepLink} size={size} />
       <Text style={styles.label}>{displayName}</Text>
       <Text style={styles.hint}>Scan to add me on Off My Chest</Text>
+      <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
+        <Text style={styles.shareButtonText}>Share Link</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -37,5 +47,17 @@ const styles = StyleSheet.create({
   hint: {
     fontSize: 14,
     color: '#666',
+  },
+  shareButton: {
+    marginTop: 8,
+    backgroundColor: '#4285F4',
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+  },
+  shareButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 16,
   },
 });

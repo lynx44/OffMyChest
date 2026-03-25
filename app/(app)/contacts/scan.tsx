@@ -40,8 +40,6 @@ export default function ScanScreen() {
 
       if (!outboxUrl || !name) throw new Error('Missing outbox or name');
 
-      // Extract email from outbox URL or use a placeholder — actual email
-      // will be read from the outbox.json owner_email field on first poll.
       await addContact(user.sub, {
         name,
         email: `pending:${outboxUrl}`,
@@ -50,7 +48,8 @@ export default function ScanScreen() {
         last_seen_updated_at: null,
       });
 
-      router.back();
+      setScanned(false);
+      router.replace('/(app)/contacts');
     } catch (err) {
       console.error('QR scan error:', err);
       setScanned(false);

@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -11,7 +12,7 @@ import {
 import { useRouter } from 'expo-router';
 
 import { useAuth } from '../../../src/auth/GoogleAuthProvider';
-import { getContacts } from '../../../src/contacts/contactStore';
+import { getContacts, removeContact } from '../../../src/contacts/contactStore';
 import { getMyOutboxUrl } from '../../../src/outbox/outboxService';
 import { Contact } from '../../../src/shared/types';
 import { QRGenerator } from '../../../src/qr/QRGenerator';
@@ -24,9 +25,9 @@ export default function ContactsScreen() {
   const [showQR, setShowQR] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (!user) return;
-
+    setLoading(true);
     Promise.all([
       getContacts(user.sub),
       getMyOutboxUrl(user.sub),
@@ -35,7 +36,7 @@ export default function ContactsScreen() {
       setMyOutboxUrl(url);
       setLoading(false);
     });
-  }, [user]);
+  }, [user]));
 
   if (loading) {
     return (
@@ -75,8 +76,19 @@ export default function ContactsScreen() {
           keyExtractor={(c) => c.email}
           renderItem={({ item }) => (
             <View style={styles.contactRow}>
-              <Text style={styles.contactName}>{item.name}</Text>
-              <Text style={styles.contactEmail}>{item.email}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.contactName}>{item.name}</Text>
+                <Text style={styles.contactEmail}>{item.email}</Text>
+              </View>
+              <TouchableOpacity
+                onPress={async () => {
+                  await removeContact(user!.sub, item.email);
+                  setContacts(prev => prev.filter(c => c.email !== item.email));
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.deleteText}>Delete</Text>
+              </TouchableOpacity>
             </View>
           )}
         />
@@ -132,6 +144,7 @@ const styles = StyleSheet.create({
   },
   contactName: { fontSize: 16, fontWeight: '600' },
   contactEmail: { fontSize: 13, color: '#666', marginTop: 2 },
+  deleteText: { color: '#FF3B30', fontSize: 14, fontWeight: '600' },
   modalContainer: {
     flex: 1,
     alignItems: 'center',
