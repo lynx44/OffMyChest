@@ -374,21 +374,25 @@ class SeamlessRecorderView(context: Context, appContext: AppContext) :
 
     val matrix = Matrix()
 
-    // Camera sensor outputs landscape; rotate to portrait
-    val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-    val cameraId = findCameraId(manager) ?: return
-    val chars = manager.getCameraCharacteristics(cameraId)
-    val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+    // The camera buffer is landscape (videoWidth x videoHeight, e.g. 640x480) but the
+    // sensor rotation means it appears portrait in the TextureView. The TextureView
+    // stretches the buffer to fill its bounds, causing distortion. We correct by using
+    // the rotated (swapped) buffer dimensions for the aspect ratio calculation.
+    val bufW = videoHeight.toFloat()  // effective width after portrait rotation
+    val bufH = videoWidth.toFloat()   // effective height after portrait rotation
+    val scaleX = viewWidth / bufW
+    val scaleY = viewHeight / bufH
+    val uniformScale = maxOf(scaleX, scaleY)
 
-    // Center the transform
-    matrix.postTranslate(-viewWidth / 2f, -viewHeight / 2f)
+    // Correct the stretch so both axes scale uniformly (center-crop)
+    val correctionX = uniformScale / scaleX
+    val correctionY = uniformScale / scaleY
+    matrix.setScale(correctionX, correctionY, viewWidth / 2f, viewHeight / 2f)
 
     // Mirror for front camera
     if (facing == "front") {
-      matrix.postScale(-1f, 1f)
+      matrix.postScale(-1f, 1f, viewWidth / 2f, viewHeight / 2f)
     }
-
-    matrix.postTranslate(viewWidth / 2f, viewHeight / 2f)
 
     textureView.setTransform(matrix)
   }
