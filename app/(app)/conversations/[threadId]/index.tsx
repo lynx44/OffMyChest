@@ -1,5 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -13,6 +13,7 @@ import {
 import { useAuth } from '../../../../src/auth/GoogleAuthProvider';
 import { getContacts } from '../../../../src/contacts/contactStore';
 import { useConversationMessages, ConversationMessage } from '../../../../src/messages/useConversationMessages';
+import { getWatchStates } from '../../../../src/messages/watchStateStore';
 import { Contact } from '../../../../src/shared/types';
 
 /** Reverse base64url → original URL */
@@ -67,6 +68,49 @@ export default function ConversationScreen() {
 
   // Refresh when screen comes back into focus
   useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
+
+  // Autoplay on first load: pick the right video based on watch history
+  const autoplayDone = useRef(false);
+  useEffect(() => {
+    if (loading || autoplayDone.current || messages.length === 0) return;
+    autoplayDone.current = true;
+
+    (async () => {
+      const urls = messages.map((m) => m.manifest_url);
+      const states = await getWatchStates(urls);
+
+      // Priority 1: last partially-watched video (most recently watched incomplete)
+      let partial: ConversationMessage | null = null;
+      let partialTime = '';
+      for (const msg of messages) {
+        const ws = states.get(msg.manifest_url);
+        if (ws && !ws.completed && ws.positionMs > 0) {
+          if (!partial || ws.lastWatchedAt > partialTime) {
+            partial = msg;
+            partialTime = ws.lastWatchedAt;
+          }
+        }
+      }
+      if (partial) { handlePlay(partial); return; }
+
+      // Priority 2: first unwatched video after the last completed one
+      let lastCompletedIdx = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const ws = states.get(messages[i].manifest_url);
+        if (ws?.completed) { lastCompletedIdx = i; break; }
+      }
+      if (lastCompletedIdx >= 0 && lastCompletedIdx < messages.length - 1) {
+        handlePlay(messages[lastCompletedIdx + 1]);
+        return;
+      }
+
+      // Priority 3: no watch history — play the oldest (first) video
+      if (states.size === 0) {
+        handlePlay(messages[0]);
+        return;
+      }
+    })();
+  }, [loading, messages]);
 
   function handlePlay(msg: ConversationMessage) {
     const encoded = encodeParam(msg.manifest_url);

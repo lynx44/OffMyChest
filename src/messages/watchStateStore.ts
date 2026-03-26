@@ -23,6 +23,18 @@ export async function getWatchState(manifestUrl: string): Promise<WatchState | n
   return JSON.parse(raw);
 }
 
+/** Batch-fetch watch states for multiple manifest URLs. Returns a Map keyed by URL. */
+export async function getWatchStates(manifestUrls: string[]): Promise<Map<string, WatchState>> {
+  const keys = manifestUrls.map(key);
+  const pairs = await AsyncStorage.multiGet(keys);
+  const result = new Map<string, WatchState>();
+  for (let i = 0; i < pairs.length; i++) {
+    const raw = pairs[i][1];
+    if (raw) result.set(manifestUrls[i], JSON.parse(raw));
+  }
+  return result;
+}
+
 export async function saveWatchState(
   manifestUrl: string,
   state: Omit<WatchState, 'lastWatchedAt'>,
