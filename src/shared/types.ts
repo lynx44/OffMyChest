@@ -34,6 +34,7 @@ export interface MessageManifest {
   sender: string; // email
   timestamp: string;
   duration_seconds: number;
+  chunk_duration_seconds?: number; // average seconds per chunk (duration / chunk count)
   chunks: string[]; // relative paths under base_url
   thumbnail: string; // relative to base_url
   base_url: string;

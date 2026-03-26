@@ -188,13 +188,14 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     return totalMs
   }
 
-  /** Seeks to a packed position (windowIndex * 1_000_000 + windowPositionMs) */
+  /** Seeks to a packed position (windowIndex * 1_000_000 + windowPositionMs).
+   *  Seeks to the START of the chunk because Google Drive URLs don't support
+   *  HTTP Range requests — seeking mid-chunk causes ExoPlayer to stall (416). */
   fun seekTo(positionMs: Long) {
     val p = player ?: return
     val windowIndex = (positionMs / 1_000_000L).toInt()
-    val windowPos = positionMs % 1_000_000L
-    Log.d(TAG, "seekTo: window=$windowIndex, offset=${windowPos}ms")
-    p.seekTo(windowIndex, windowPos)
+    Log.d(TAG, "seekTo: window=$windowIndex (start of chunk)")
+    p.seekTo(windowIndex, 0)
   }
 
   /** Append new chunk URLs to the existing player without resetting playback */

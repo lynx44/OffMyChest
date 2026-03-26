@@ -177,6 +177,7 @@ export class ChunkUploader {
     }
 
     // Build final manifest
+    const chunkCount = uploadedChunks.length;
     const manifest: MessageManifest = {
       version: OUTBOX_VERSION,
       message_id: this.session.messageId,
@@ -185,6 +186,7 @@ export class ChunkUploader {
       sender: senderEmail,
       timestamp: new Date().toISOString(),
       duration_seconds: totalDurationSeconds,
+      chunk_duration_seconds: chunkCount > 0 ? totalDurationSeconds / chunkCount : 0,
       chunks: uploadedChunks.map((c) => c.publicUrl),
       thumbnail: thumbnailUrl,
       base_url: '',

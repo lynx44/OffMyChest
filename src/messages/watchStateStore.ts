@@ -3,8 +3,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export interface WatchState {
   /** true if the video was watched to the end */
   completed: boolean;
-  /** playback position in ms (0 if completed) */
+  /** playback position — packed format (windowIndex * 1_000_000 + windowOffsetMs) */
   positionMs: number;
+  /** elapsed seconds at time of save (for display) */
+  elapsedSeconds?: number;
   /** ISO 8601 timestamp of last watch (partial or complete) */
   lastWatchedAt: string;
 }

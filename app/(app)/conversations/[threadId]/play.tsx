@@ -45,6 +45,8 @@ export default function PlayScreen() {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const loadedChunkCountRef = useRef(0);
+  /** Seconds to add for chunks skipped during resume (before the seek target) */
+  const elapsedOffsetRef = useRef(0);
 
   const togglePlayPause = useCallback(() => {
     if (paused) {
@@ -60,8 +62,13 @@ export default function PlayScreen() {
     const url = manifestUrlRef.current;
     if (!url || !playerRef.current) return;
     const positionMs = await playerRef.current.getPositionMs();
+    const elapsedMs = await playerRef.current.getElapsedMs();
     if (positionMs > 0) {
-      await saveWatchState(url, { completed: false, positionMs });
+      await saveWatchState(url, {
+        completed: false,
+        positionMs,
+        elapsedSeconds: Math.floor(elapsedMs / 1000),
+      });
     }
   }, []);
 
@@ -118,13 +125,15 @@ export default function PlayScreen() {
     };
   }, []);
 
-  // Poll elapsed time for display
+  // Poll native player for elapsed time, adding offset for skipped chunks
   useEffect(() => {
     if (loadState !== 'playing') return;
     elapsedTimerRef.current = setInterval(async () => {
-      if (!playerRef.current) return;
-      const ms = await playerRef.current.getElapsedMs();
-      setElapsedSeconds(Math.floor(ms / 1000));
+      if (paused) return;
+      try {
+        const ms = await playerRef.current?.getElapsedMs();
+        if (ms != null) setElapsedSeconds(elapsedOffsetRef.current + Math.floor(ms / 1000));
+      } catch {}
     }, 500);
     return () => {
       if (elapsedTimerRef.current) {
@@ -132,7 +141,7 @@ export default function PlayScreen() {
         elapsedTimerRef.current = null;
       }
     };
-  }, [loadState]);
+  }, [loadState, paused]);
 
   // Handle Android hardware back button
   useEffect(() => {
@@ -163,6 +172,13 @@ export default function PlayScreen() {
 
         if (watchState && !watchState.completed && watchState.positionMs > 0) {
           setStartPosition(watchState.positionMs);
+          // Compute elapsed offset for skipped chunks
+          const windowIndex = Math.floor(watchState.positionMs / 1_000_000);
+          const chunkDur = manifest.chunk_duration_seconds
+            ?? (manifest.chunks.length > 0 ? manifest.duration_seconds / manifest.chunks.length : 0);
+          const offset = Math.floor(windowIndex * chunkDur);
+          elapsedOffsetRef.current = offset;
+          setElapsedSeconds(offset);
         }
 
         const live = manifest.status === 'recording';
