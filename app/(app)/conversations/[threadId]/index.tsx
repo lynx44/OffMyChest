@@ -79,6 +79,10 @@ export default function ConversationScreen() {
       const urls = messages.map((m) => m.manifest_url);
       const states = await getWatchStates(urls);
 
+      // If the latest video has been watched, just show the thread view
+      const latestState = states.get(messages[messages.length - 1].manifest_url);
+      if (latestState?.completed) return;
+
       // Priority 1: last partially-watched video (most recently watched incomplete)
       let partial: ConversationMessage | null = null;
       let partialTime = '';
