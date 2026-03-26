@@ -81,6 +81,9 @@ export default function ConversationScreen() {
     setWatchedMap(map);
   }, [messages]);
 
+  // Refresh watch states when messages change (e.g. new message arrives via polling)
+  useEffect(() => { refreshWatchStates(); }, [refreshWatchStates]);
+
   // Refresh messages + watch states when screen comes back into focus
   useFocusEffect(useCallback(() => { refresh(); refreshWatchStates(); }, [refresh, refreshWatchStates]));
 
@@ -190,7 +193,11 @@ export default function ConversationScreen() {
               </View>
 
               {/* Watch status badge */}
-              {watchedMap.get(item.manifest_url) === 'watched' ? (
+              {item.status === 'recording' ? (
+                <View style={[styles.watchBadge, styles.liveBadge]}>
+                  <Text style={styles.newBadgeText}>LIVE</Text>
+                </View>
+              ) : watchedMap.get(item.manifest_url) === 'watched' ? (
                 <View style={styles.watchBadge}>
                   <Text style={styles.watchBadgeText}>Watched</Text>
                 </View>
@@ -291,6 +298,7 @@ const styles = StyleSheet.create({
   },
   watchBadgeText: { color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: '600' },
   newBadge: { backgroundColor: '#007AFF' },
+  liveBadge: { backgroundColor: '#FF3B30' },
   newBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
 
   meta: {
