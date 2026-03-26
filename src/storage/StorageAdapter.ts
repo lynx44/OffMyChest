@@ -14,12 +14,15 @@ export interface StorageAdapter {
     fileUri: string,
   ): Promise<string>;
 
-  /** Upload a message manifest JSON. Returns the public download URL. */
+  /** Upload a message manifest JSON. Returns { url, fileId }. */
   uploadManifest(
     threadId: string,
     messageId: string,
     manifest: MessageManifest,
-  ): Promise<string>;
+  ): Promise<{ url: string; fileId: string }>;
+
+  /** Update an existing manifest file in-place. */
+  updateManifest(fileId: string, manifest: MessageManifest): Promise<void>;
 
   /** Upload a thumbnail from a local file URI. Returns the public download URL. */
   uploadThumbnail(

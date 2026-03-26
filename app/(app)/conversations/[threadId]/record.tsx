@@ -112,7 +112,7 @@ export default function RecordScreen() {
       messageId,
       threadId,
       groupId: groupId ?? null,
-    });
+    }, user.email);
 
     setStatus('recording');
     setIsRecording(true);

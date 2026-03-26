@@ -15,12 +15,36 @@ class SeamlessPlayerModule : Module() {
         view.loadChunks(chunks)
       }
 
+      Prop("startPosition") { view: SeamlessPlayerView, positionMs: Long ->
+        view.setStartPosition(positionMs)
+      }
+
+      Prop("liveMode") { view: SeamlessPlayerView, live: Boolean ->
+        view.setLiveMode(live)
+      }
+
       AsyncFunction("play") { view: SeamlessPlayerView ->
         view.play()
       }.runOnQueue(Queues.MAIN)
 
       AsyncFunction("pause") { view: SeamlessPlayerView ->
         view.pause()
+      }.runOnQueue(Queues.MAIN)
+
+      AsyncFunction("getPositionMs") { view: SeamlessPlayerView ->
+        view.getPositionMs()
+      }.runOnQueue(Queues.MAIN)
+
+      AsyncFunction("seekTo") { view: SeamlessPlayerView, positionMs: Long ->
+        view.seekTo(positionMs)
+      }.runOnQueue(Queues.MAIN)
+
+      AsyncFunction("appendChunks") { view: SeamlessPlayerView, urls: List<String> ->
+        view.appendChunks(urls)
+      }.runOnQueue(Queues.MAIN)
+
+      AsyncFunction("getLoadedChunkCount") { view: SeamlessPlayerView ->
+        view.getLoadedChunkCount()
       }.runOnQueue(Queues.MAIN)
     }
   }

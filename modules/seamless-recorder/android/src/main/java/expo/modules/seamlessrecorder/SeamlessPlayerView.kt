@@ -34,7 +34,12 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   private val onPlaybackError by EventDispatcher()
 
   private var player: ExoPlayer? = null
+  private var concatenatingSource: ConcatenatingMediaSource? = null
+  private var dataSourceFactory: DefaultHttpDataSource.Factory? = null
   private val textureView = TextureView(context)
+  private var pendingSeekMs: Long = 0L
+  private var loadedChunkCount = 0
+  private var isLiveMode = false
 
   init {
     addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -50,23 +55,35 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     val exoPlayer = ExoPlayer.Builder(context).build()
     exoPlayer.setVideoTextureView(textureView)
 
-    val dataSourceFactory = DefaultHttpDataSource.Factory()
+    val dsFactory = DefaultHttpDataSource.Factory()
       .setConnectTimeoutMs(15_000)
       .setReadTimeoutMs(15_000)
       .setAllowCrossProtocolRedirects(true)
+    dataSourceFactory = dsFactory
 
     val concatenating = ConcatenatingMediaSource()
     for (url in urls) {
-      val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+      val mediaSource = ProgressiveMediaSource.Factory(dsFactory)
         .createMediaSource(MediaItem.fromUri(Uri.parse(url)))
       concatenating.addMediaSource(mediaSource)
     }
+    concatenatingSource = concatenating
+    loadedChunkCount = urls.size
 
     exoPlayer.addListener(object : Player.Listener {
       override fun onPlaybackStateChanged(state: Int) {
+        if (state == Player.STATE_READY && pendingSeekMs > 0) {
+          Log.d(TAG, "Applying pending seek: ${pendingSeekMs}ms")
+          seekTo(pendingSeekMs)
+          pendingSeekMs = 0L
+        }
         if (state == Player.STATE_ENDED) {
-          Log.d(TAG, "Playback finished")
-          onPlaybackFinished(mapOf<String, Any>())
+          if (isLiveMode) {
+            Log.d(TAG, "Reached end of available chunks (live mode — waiting for more)")
+          } else {
+            Log.d(TAG, "Playback finished")
+            onPlaybackFinished(mapOf<String, Any>())
+          }
         }
       }
 
@@ -123,12 +140,98 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     Log.d(TAG, "Applied transform: video=${videoW}x${videoH}, view=${viewWidth}x${viewHeight}")
   }
 
+  fun setStartPosition(positionMs: Long) {
+    pendingSeekMs = positionMs
+    Log.d(TAG, "startPosition set to ${positionMs}ms")
+  }
+
   fun play() { player?.play() }
   fun pause() { player?.pause() }
+
+  /** Returns the absolute position across all chunks in ms */
+  fun getPositionMs(): Long {
+    val p = player ?: return 0L
+    val timeline = p.currentTimeline
+    if (timeline.isEmpty) return p.currentPosition
+
+    var totalMs = 0L
+    val window = com.google.android.exoplayer2.Timeline.Window()
+    for (i in 0 until p.currentMediaItemIndex) {
+      timeline.getWindow(i, window)
+      totalMs += window.durationMs
+    }
+    totalMs += p.currentPosition
+    Log.d(TAG, "getPositionMs: $totalMs (window=${p.currentMediaItemIndex}, windowPos=${p.currentPosition})")
+    return totalMs
+  }
+
+  /** Seeks to an absolute position across all chunks */
+  fun seekTo(positionMs: Long) {
+    val p = player ?: return
+    val timeline = p.currentTimeline
+    if (timeline.isEmpty) {
+      p.seekTo(positionMs)
+      return
+    }
+
+    var remaining = positionMs
+    val window = com.google.android.exoplayer2.Timeline.Window()
+    for (i in 0 until timeline.windowCount) {
+      timeline.getWindow(i, window)
+      if (remaining < window.durationMs) {
+        Log.d(TAG, "seekTo: ${positionMs}ms → window=$i, offset=${remaining}ms")
+        p.seekTo(i, remaining)
+        return
+      }
+      remaining -= window.durationMs
+    }
+    // Past the end — seek to last window
+    val lastIdx = timeline.windowCount - 1
+    timeline.getWindow(lastIdx, window)
+    Log.d(TAG, "seekTo: ${positionMs}ms → last window=$lastIdx")
+    p.seekTo(lastIdx, window.durationMs)
+  }
+
+  /** Append new chunk URLs to the existing player without resetting playback */
+  fun appendChunks(urls: List<String>) {
+    val p = player ?: return
+    val concat = concatenatingSource ?: return
+    val factory = dataSourceFactory ?: return
+    val wasEnded = p.playbackState == Player.STATE_ENDED
+
+    var added = 0
+    for (url in urls) {
+      val mediaSource = ProgressiveMediaSource.Factory(factory)
+        .createMediaSource(MediaItem.fromUri(Uri.parse(url)))
+      concat.addMediaSource(mediaSource)
+      added++
+    }
+    val previousCount = loadedChunkCount
+    loadedChunkCount += added
+    Log.d(TAG, "Appended $added chunks (total=$loadedChunkCount, wasEnded=$wasEnded)")
+
+    // If the player had reached the end, seek to the new content and resume
+    if (wasEnded) {
+      p.seekTo(previousCount, 0)
+      p.playWhenReady = true
+      Log.d(TAG, "Resuming playback from chunk $previousCount")
+    }
+  }
+
+  fun setLiveMode(live: Boolean) {
+    isLiveMode = live
+    Log.d(TAG, "liveMode=$live")
+  }
+
+  fun getLoadedChunkCount(): Int = loadedChunkCount
 
   private fun releasePlayer() {
     player?.release()
     player = null
+    concatenatingSource = null
+    dataSourceFactory = null
+    loadedChunkCount = 0
+    isLiveMode = false
   }
 
   override fun onDetachedFromWindow() {

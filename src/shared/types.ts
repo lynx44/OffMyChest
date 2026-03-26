@@ -15,6 +15,7 @@ export interface OutboxEntry {
   duration_seconds: number;
   manifest_url: string;
   thumbnail_url: string;
+  status?: 'recording' | 'complete'; // absent = complete (backwards compat)
 }
 
 export interface Outbox {
@@ -36,6 +37,7 @@ export interface MessageManifest {
   chunks: string[]; // relative paths under base_url
   thumbnail: string; // relative to base_url
   base_url: string;
+  status?: 'recording' | 'complete'; // absent = complete (backwards compat)
 }
 
 export interface GroupMember {

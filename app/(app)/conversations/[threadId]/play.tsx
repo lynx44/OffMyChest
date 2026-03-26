@@ -12,6 +12,7 @@ import {
 import { fetchPublicJson } from '../../../../src/storage/driveApi';
 import { MessageManifest } from '../../../../src/shared/types';
 import { SeamlessPlayerView, SeamlessPlayerRef } from '../../../../modules/seamless-recorder/src';
+import { getWatchState, saveWatchState } from '../../../../src/messages/watchStateStore';
 
 function decodeParam(encoded: string): string {
   const padded = encoded + '==='.slice((encoded.length + 3) % 4);
@@ -24,6 +25,8 @@ function formatDuration(seconds: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
+const LIVE_POLL_INTERVAL_MS = 3000;
+
 export default function PlayScreen() {
   const { manifest: encodedManifest } = useLocalSearchParams<{ manifest: string }>();
   const router = useRouter();
@@ -33,7 +36,12 @@ export default function PlayScreen() {
   const [totalDuration, setTotalDuration] = useState(0);
   const [chunks, setChunks] = useState<string[]>([]);
   const [paused, setPaused] = useState(false);
+  const [isLive, setIsLive] = useState(false);
+  const [startPosition, setStartPosition] = useState(0);
   const playerRef = useRef<SeamlessPlayerRef>(null);
+  const manifestUrlRef = useRef('');
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const loadedChunkCountRef = useRef(0);
 
   const togglePlayPause = useCallback(() => {
     if (paused) {
@@ -44,6 +52,65 @@ export default function PlayScreen() {
     setPaused((p) => !p);
   }, [paused]);
 
+  /** Save current position as partial watch state */
+  const savePartialProgress = useCallback(async () => {
+    const url = manifestUrlRef.current;
+    if (!url || !playerRef.current) return;
+    const positionMs = await playerRef.current.getPositionMs();
+    if (positionMs > 0) {
+      await saveWatchState(url, { completed: false, positionMs });
+    }
+  }, []);
+
+  /** Mark as fully watched */
+  const saveCompleted = useCallback(async () => {
+    const url = manifestUrlRef.current;
+    if (!url) return;
+    await saveWatchState(url, { completed: true, positionMs: 0 });
+  }, []);
+
+  /** Poll manifest for new chunks during live recording */
+  const startLivePolling = useCallback((manifestUrl: string) => {
+    if (pollTimerRef.current) return;
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const manifest = await fetchPublicJson<MessageManifest>(manifestUrl);
+        const newChunks = manifest.chunks;
+        const loaded = loadedChunkCountRef.current;
+
+        if (newChunks.length > loaded) {
+          const toAppend = newChunks.slice(loaded);
+          console.log(`[Live] Appending ${toAppend.length} new chunks`);
+          await playerRef.current?.appendChunks(toAppend);
+          loadedChunkCountRef.current = newChunks.length;
+        }
+
+        if (manifest.status === 'complete' || !manifest.status) {
+          // Recording finished — stop polling
+          console.log('[Live] Recording complete, stopping poll');
+          setIsLive(false);
+          setTotalDuration(manifest.duration_seconds);
+          if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current);
+            pollTimerRef.current = null;
+          }
+        }
+      } catch (err) {
+        console.warn('[Live] Poll failed:', err);
+      }
+    }, LIVE_POLL_INTERVAL_MS);
+  }, []);
+
+  // Cleanup poll timer
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!encodedManifest) {
       setError('No manifest URL provided');
@@ -52,19 +119,47 @@ export default function PlayScreen() {
     }
 
     const manifestUrl = decodeParam(encodedManifest);
+    manifestUrlRef.current = manifestUrl;
 
-    fetchPublicJson<MessageManifest>(manifestUrl)
-      .then((manifest) => {
+    (async () => {
+      try {
+        const [manifest, watchState] = await Promise.all([
+          fetchPublicJson<MessageManifest>(manifestUrl),
+          getWatchState(manifestUrl),
+        ]);
         if (!manifest.chunks?.length) throw new Error('Message has no video chunks');
+
+        if (watchState && !watchState.completed && watchState.positionMs > 0) {
+          setStartPosition(watchState.positionMs);
+        }
+
+        const live = manifest.status === 'recording';
+        setIsLive(live);
         setTotalDuration(manifest.duration_seconds);
         setChunks(manifest.chunks);
+        loadedChunkCountRef.current = manifest.chunks.length;
         setLoadState('playing');
-      })
-      .catch((err) => {
+
+        if (live) {
+          startLivePolling(manifestUrl);
+        }
+      } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load message');
         setLoadState('error');
-      });
-  }, [encodedManifest]);
+      }
+    })();
+  }, [encodedManifest, startLivePolling]);
+
+  const handlePlaybackFinished = useCallback(async () => {
+    if (isLive) return; // Don't exit during live — more chunks may arrive
+    await saveCompleted();
+    router.back();
+  }, [saveCompleted, router, isLive]);
+
+  const handleGoBack = useCallback(async () => {
+    await savePartialProgress();
+    router.back();
+  }, [savePartialProgress, router]);
 
   return (
     <View style={styles.container}>
@@ -74,7 +169,9 @@ export default function PlayScreen() {
             ref={playerRef}
             style={StyleSheet.absoluteFillObject}
             chunks={chunks}
-            onPlaybackFinished={() => router.back()}
+            startPosition={startPosition}
+            liveMode={isLive}
+            onPlaybackFinished={handlePlaybackFinished}
             onPlaybackError={(msg) => {
               setError(msg);
               setLoadState('error');
@@ -101,10 +198,20 @@ export default function PlayScreen() {
 
       {loadState === 'playing' && (
         <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={handleGoBack}>
             <Text style={styles.closeText}>✕</Text>
           </TouchableOpacity>
-          <Text style={styles.durationText}>{formatDuration(totalDuration)}</Text>
+          <View style={styles.topRight}>
+            {isLive && (
+              <View style={styles.liveBadge}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveText}>LIVE</Text>
+              </View>
+            )}
+            {!isLive && totalDuration > 0 && (
+              <Text style={styles.durationText}>{formatDuration(totalDuration)}</Text>
+            )}
+          </View>
         </View>
       )}
     </View>
@@ -135,6 +242,28 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
     zIndex: 10,
   },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   closeText: { color: '#fff', fontSize: 20 },
   durationText: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontVariant: ['tabular-nums'] },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#FF3B30',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#fff',
+  },
+  liveText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
 });

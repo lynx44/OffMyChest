@@ -139,12 +139,17 @@ export class GoogleDriveAdapter implements StorageAdapter {
     threadId: string,
     messageId: string,
     manifest: MessageManifest,
-  ): Promise<string> {
+  ): Promise<{ url: string; fileId: string }> {
     const folderId = await this.ensureFolderId();
     const msgFolderId = await this.ensureSubfolder(`threads/${threadId}/${messageId}`, folderId);
 
     const file = await uploadJsonFile('manifest.json', manifest, msgFolderId, this.accessToken);
-    return shareFilePublic(file.id, this.accessToken);
+    const url = await shareFilePublic(file.id, this.accessToken);
+    return { url, fileId: file.id };
+  }
+
+  async updateManifest(fileId: string, manifest: MessageManifest): Promise<void> {
+    await updateJsonFile(fileId, manifest, this.accessToken);
   }
 
   async uploadThumbnail(
@@ -190,9 +195,11 @@ export class GoogleDriveAdapter implements StorageAdapter {
       // Fetch latest to avoid stomping concurrent writes from other devices
       const current = await fetchPublicJson<Outbox>(outboxUrl);
 
-      // De-duplicate by message_id then append
-      const existing = new Set(current.messages.map((m) => m.message_id));
-      if (!existing.has(entry.message_id)) {
+      // Upsert by message_id — replace if exists, append if new
+      const idx = current.messages.findIndex((m) => m.message_id === entry.message_id);
+      if (idx >= 0) {
+        current.messages[idx] = entry;
+      } else {
         current.messages.push(entry);
       }
       current.updated_at = new Date().toISOString();
