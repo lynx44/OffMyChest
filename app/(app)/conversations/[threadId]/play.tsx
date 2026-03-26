@@ -39,9 +39,11 @@ export default function PlayScreen() {
   const [paused, setPaused] = useState(false);
   const [isLive, setIsLive] = useState(false);
   const [startPosition, setStartPosition] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const playerRef = useRef<SeamlessPlayerRef>(null);
   const manifestUrlRef = useRef('');
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const loadedChunkCountRef = useRef(0);
 
   const togglePlayPause = useCallback(() => {
@@ -102,15 +104,35 @@ export default function PlayScreen() {
     }, LIVE_POLL_INTERVAL_MS);
   }, []);
 
-  // Cleanup poll timer
+  // Cleanup timers
   useEffect(() => {
     return () => {
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
       }
+      if (elapsedTimerRef.current) {
+        clearInterval(elapsedTimerRef.current);
+        elapsedTimerRef.current = null;
+      }
     };
   }, []);
+
+  // Poll elapsed time for display
+  useEffect(() => {
+    if (loadState !== 'playing') return;
+    elapsedTimerRef.current = setInterval(async () => {
+      if (!playerRef.current) return;
+      const ms = await playerRef.current.getElapsedMs();
+      setElapsedSeconds(Math.floor(ms / 1000));
+    }, 500);
+    return () => {
+      if (elapsedTimerRef.current) {
+        clearInterval(elapsedTimerRef.current);
+        elapsedTimerRef.current = null;
+      }
+    };
+  }, [loadState]);
 
   // Handle Android hardware back button
   useEffect(() => {
@@ -218,9 +240,10 @@ export default function PlayScreen() {
                 <Text style={styles.liveText}>LIVE</Text>
               </View>
             )}
-            {!isLive && totalDuration > 0 && (
-              <Text style={styles.durationText}>{formatDuration(totalDuration)}</Text>
-            )}
+            <Text style={styles.durationText}>
+              {formatDuration(elapsedSeconds)}
+              {!isLive && totalDuration > 0 ? ` / ${formatDuration(totalDuration)}` : ''}
+            </Text>
           </View>
         </View>
       )}

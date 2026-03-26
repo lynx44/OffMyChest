@@ -173,6 +173,21 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     return packed
   }
 
+  /** Returns actual elapsed playback time in ms across all chunks */
+  fun getElapsedMs(): Long {
+    val p = player ?: return 0L
+    val timeline = p.currentTimeline
+    if (timeline.isEmpty) return p.currentPosition
+    var totalMs = 0L
+    val window = com.google.android.exoplayer2.Timeline.Window()
+    for (i in 0 until p.currentMediaItemIndex) {
+      timeline.getWindow(i, window)
+      if (window.durationMs > 0) totalMs += window.durationMs
+    }
+    totalMs += p.currentPosition
+    return totalMs
+  }
+
   /** Seeks to a packed position (windowIndex * 1_000_000 + windowPositionMs) */
   fun seekTo(positionMs: Long) {
     val p = player ?: return

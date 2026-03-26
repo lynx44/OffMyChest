@@ -35,6 +35,10 @@ class SeamlessPlayerModule : Module() {
         view.getPositionMs()
       }.runOnQueue(Queues.MAIN)
 
+      AsyncFunction("getElapsedMs") { view: SeamlessPlayerView ->
+        view.getElapsedMs()
+      }.runOnQueue(Queues.MAIN)
+
       AsyncFunction("seekTo") { view: SeamlessPlayerView, positionMs: Long ->
         view.seekTo(positionMs)
       }.runOnQueue(Queues.MAIN)
