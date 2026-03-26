@@ -45,6 +45,7 @@ export default function PlayScreen() {
   const [isLive, setIsLive] = useState(false);
   const [startPosition, setStartPosition] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [speed, setSpeed] = useState(1);
   const playerRef = useRef<SeamlessPlayerRef>(null);
   const manifestUrlRef = useRef('');
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -52,6 +53,14 @@ export default function PlayScreen() {
   const loadedChunkCountRef = useRef(0);
   /** Seconds to add for chunks skipped during resume (before the seek target) */
   const elapsedOffsetRef = useRef(0);
+
+  const SPEEDS = [1, 1.5, 2, 3];
+  const cycleSpeed = useCallback(() => {
+    const nextIdx = (SPEEDS.indexOf(speed) + 1) % SPEEDS.length;
+    const next = SPEEDS[nextIdx];
+    setSpeed(next);
+    playerRef.current?.setSpeed(next);
+  }, [speed]);
 
   const togglePlayPause = useCallback(() => {
     if (paused) {
@@ -168,6 +177,7 @@ export default function PlayScreen() {
     setLoadState('loading');
     setChunks([]);
     setPaused(false);
+    setSpeed(1);
     setStartPosition(0);
     setElapsedSeconds(0);
     elapsedOffsetRef.current = 0;
@@ -288,6 +298,9 @@ export default function PlayScreen() {
                 <Text style={styles.liveText}>LIVE</Text>
               </View>
             )}
+            <TouchableOpacity onPress={cycleSpeed} style={styles.speedBadge}>
+              <Text style={styles.speedText}>{speed === 1 ? '1x' : `${speed}x`}</Text>
+            </TouchableOpacity>
             <Text style={styles.durationText}>
               {formatDuration(elapsedSeconds)}
               {!isLive && totalDuration > 0 ? ` / ${formatDuration(totalDuration)}` : ''}
@@ -325,6 +338,13 @@ const styles = StyleSheet.create({
   },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   closeText: { color: '#fff', fontSize: 20 },
+  speedBadge: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  speedText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   durationText: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontVariant: ['tabular-nums'] },
   liveBadge: {
     flexDirection: 'row',

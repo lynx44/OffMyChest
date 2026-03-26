@@ -96,6 +96,11 @@ class SeamlessPlayerView: ExpoView {
         player?.pause()
     }
 
+    func setSpeed(_ speed: Float) {
+        player?.rate = speed
+        NSLog("[%@] setSpeed=%f", SeamlessPlayerView.TAG, speed)
+    }
+
     func getPositionMs() -> Int64 {
         guard let player = player, let currentItem = player.currentItem else { return 0 }
         let currentIndex = allItems.firstIndex(where: { $0 === currentItem }) ?? 0

@@ -162,6 +162,12 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   fun play() { player?.play() }
   fun pause() { player?.pause() }
 
+  fun setSpeed(speed: Float) {
+    val p = player ?: return
+    p.setPlaybackSpeed(speed)
+    Log.d(TAG, "setSpeed=$speed")
+  }
+
   /**
    * Returns a packed position: windowIndex * 1_000_000 + windowPositionMs.
    * This avoids needing buffered durations to reconstruct an absolute position.

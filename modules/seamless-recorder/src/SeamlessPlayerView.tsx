@@ -8,6 +8,7 @@ export interface SeamlessPlayerRef {
   getPositionMs: () => Promise<number>;
   getElapsedMs: () => Promise<number>;
   seekTo: (positionMs: number) => Promise<void>;
+  setSpeed: (speed: number) => Promise<void>;
   appendChunks: (urls: string[]) => Promise<void>;
   getLoadedChunkCount: () => Promise<number>;
 }
@@ -51,6 +52,9 @@ export const SeamlessPlayerView = forwardRef<SeamlessPlayerRef, Props>(
       },
       async seekTo(positionMs: number) {
         await (nativeRef.current as any)?.seekTo(positionMs);
+      },
+      async setSpeed(speed: number) {
+        await (nativeRef.current as any)?.setSpeed(speed);
       },
       async appendChunks(urls: string[]) {
         await (nativeRef.current as any)?.appendChunks(urls);

@@ -41,6 +41,10 @@ public class SeamlessPlayerModule: Module {
                 view.seekTo(Int64(positionMs))
             }.runOnQueue(.main)
 
+            AsyncFunction("setSpeed") { (view: SeamlessPlayerView, speed: Float) in
+                view.setSpeed(speed)
+            }.runOnQueue(.main)
+
             AsyncFunction("appendChunks") { (view: SeamlessPlayerView, urls: [String]) in
                 view.appendChunks(urls)
             }.runOnQueue(.main)
