@@ -156,7 +156,7 @@ export default function ConversationScreen() {
       ) : null}
 
       <FlatList
-        data={messages}
+        data={[...messages].reverse()}
         keyExtractor={(m) => m.message_id}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
