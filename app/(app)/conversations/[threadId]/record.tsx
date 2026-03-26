@@ -1,7 +1,7 @@
 import * as Crypto from 'expo-crypto';
-import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Button,
@@ -13,10 +13,14 @@ import {
 
 import { useAuth } from '../../../../src/auth/GoogleAuthProvider';
 import { ChunkUploader } from '../../../../src/recording/ChunkUploader';
-import { useChunkedRecorder } from '../../../../src/recording/useChunkedRecorder';
 import { saveDraft, updateDraftStatus } from '../../../../src/recording/draftStore';
 import { useStorageAdapter } from '../../../../src/storage/useStorageAdapter';
-import { RecordingStatus, UploadedChunk } from '../../../../src/recording/recordingTypes';
+import { RecordingStatus } from '../../../../src/recording/recordingTypes';
+import {
+  SeamlessRecorderView,
+  SeamlessRecorderRef,
+  ChunkReadyEvent,
+} from '../../../../modules/seamless-recorder/src';
 
 export default function RecordScreen() {
   const { threadId, groupId } = useLocalSearchParams<{
@@ -30,16 +34,23 @@ export default function RecordScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [micPermission, requestMicPermission] = useMicrophonePermissions();
   const [status, setStatus] = useState<RecordingStatus>('idle');
+  const [isRecording, setIsRecording] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const { cameraRef, startRecording, stopRecording, state } = useChunkedRecorder();
-
-  // Stable refs for the current session
+  const recorderRef = useRef<SeamlessRecorderRef>(null);
   const messageIdRef = useRef<string>('');
   const uploaderRef = useRef<ChunkUploader | null>(null);
   const startTimeRef = useRef<number>(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Permissions not yet resolved
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
   if (!permission || !micPermission) {
     return <View style={styles.container} />;
   }
@@ -62,24 +73,32 @@ export default function RecordScreen() {
     );
   }
 
+  function handleChunkReady(event: ChunkReadyEvent) {
+    console.log(`[Record] Chunk ${event.index} ready: ${event.uri}`);
+    uploaderRef.current?.enqueueChunk(event.index, event.uri);
+  }
+
+  function handleRecorderError(message: string) {
+    console.error('[Record] Recorder error:', message);
+    setErrorMessage(message);
+    setStatus('error');
+    setIsRecording(false);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
   async function handleStartRecording() {
     if (!adapter || !user) {
       setErrorMessage('Not ready — please try again.');
       return;
     }
 
-    // Generate a stable messageId for this recording session
     const messageId = Crypto.randomUUID();
     messageIdRef.current = messageId;
     startTimeRef.current = Date.now();
 
-    const session = {
-      messageId,
-      threadId,
-      groupId: groupId ?? null,
-    };
-
-    // Create draft in AsyncStorage immediately
     await saveDraft({
       message_id: messageId,
       thread_id: threadId,
@@ -89,23 +108,49 @@ export default function RecordScreen() {
       status: 'recording',
     });
 
-    uploaderRef.current = new ChunkUploader(adapter, session);
+    uploaderRef.current = new ChunkUploader(adapter, {
+      messageId,
+      threadId,
+      groupId: groupId ?? null,
+    });
 
     setStatus('recording');
+    setIsRecording(true);
+    setElapsedSeconds(0);
     setErrorMessage(null);
 
-    startRecording((index, uri) => {
-      // Fire-and-forget upload for each chunk
-      uploaderRef.current?.enqueueChunk(index, uri);
-    });
+    // Elapsed timer
+    const start = Date.now();
+    timerRef.current = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+
+    try {
+      await recorderRef.current?.startRecording();
+    } catch (err) {
+      console.error('startRecording failed:', err);
+      setErrorMessage('Failed to start recording.');
+      setStatus('error');
+      setIsRecording(false);
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    }
   }
 
   async function handleStopRecording() {
     if (status !== 'recording') return;
-
     setStatus('stopping');
-    // Await ensures the final chunk callback has fired before we finalize
-    await stopRecording();
+    setIsRecording(false);
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    try {
+      await recorderRef.current?.stopRecording();
+    } catch (err) {
+      console.error('stopRecording failed:', err);
+    }
 
     await finalize();
   }
@@ -150,16 +195,15 @@ export default function RecordScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Camera viewfinder */}
-      <CameraView
-        ref={cameraRef as React.RefObject<CameraView>}
+      <SeamlessRecorderView
+        ref={recorderRef}
         style={StyleSheet.absoluteFillObject}
         facing="front"
-        mode="video"
         videoQuality="480p"
+        onChunkReady={handleChunkReady}
+        onError={handleRecorderError}
       />
 
-      {/* Overlay UI */}
       <View style={styles.overlay}>
         {/* Top bar */}
         <View style={styles.topBar}>
@@ -170,22 +214,13 @@ export default function RecordScreen() {
             <Text style={styles.cancelText}>Cancel</Text>
           </TouchableOpacity>
 
-          {state.isRecording && (
+          {isRecording && (
             <View style={styles.recordingIndicator}>
               <View style={styles.recordingDot} />
-              <Text style={styles.timerText}>{formatDuration(state.elapsedSeconds)}</Text>
+              <Text style={styles.timerText}>{formatDuration(elapsedSeconds)}</Text>
             </View>
           )}
         </View>
-
-        {/* Upload progress */}
-        {state.chunkCount > 0 && status === 'recording' && (
-          <View style={styles.uploadBadge}>
-            <Text style={styles.uploadBadgeText}>
-              Uploading chunk {state.chunkCount}...
-            </Text>
-          </View>
-        )}
 
         {/* Bottom controls */}
         <View style={styles.bottomBar}>
@@ -198,17 +233,14 @@ export default function RecordScreen() {
             </View>
           ) : (
             <TouchableOpacity
-              style={[
-                styles.recordBtn,
-                state.isRecording && styles.recordBtnActive,
-              ]}
-              onPress={state.isRecording ? handleStopRecording : handleStartRecording}
+              style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
+              onPress={isRecording ? handleStopRecording : handleStartRecording}
               disabled={status === 'stopping'}
             >
               <View
                 style={[
                   styles.recordBtnInner,
-                  state.isRecording && styles.recordBtnInnerActive,
+                  isRecording && styles.recordBtnInnerActive,
                 ]}
               />
             </TouchableOpacity>
@@ -243,11 +275,7 @@ const styles = StyleSheet.create({
     paddingTop: 56,
     paddingHorizontal: 24,
   },
-  cancelText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '500',
-  },
+  cancelText: { color: '#fff', fontSize: 16, fontWeight: '500' },
   recordingIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -269,21 +297,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
   },
-  uploadBadge: {
-    alignSelf: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  uploadBadgeText: {
-    color: '#fff',
-    fontSize: 12,
-  },
-  bottomBar: {
-    alignItems: 'center',
-    paddingBottom: 56,
-  },
+  bottomBar: { alignItems: 'center', paddingBottom: 56 },
   recordBtn: {
     width: 72,
     height: 72,
@@ -293,9 +307,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  recordBtnActive: {
-    borderColor: '#FF3B30',
-  },
+  recordBtnActive: { borderColor: '#FF3B30' },
   recordBtnInner: {
     width: 52,
     height: 52,
@@ -308,39 +320,16 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: '#FF3B30',
   },
-  uploadingContainer: {
-    alignItems: 'center',
-    gap: 8,
-  },
-  uploadingText: {
-    color: '#fff',
-    fontSize: 14,
-  },
-  permissionText: {
-    color: '#fff',
-    textAlign: 'center',
-    padding: 32,
-    fontSize: 16,
-  },
-  cancelLink: {
-    color: '#aaa',
-    fontSize: 16,
-    marginTop: 16,
-  },
-  errorText: {
-    color: '#fff',
-    textAlign: 'center',
-    padding: 32,
-    fontSize: 16,
-  },
+  uploadingContainer: { alignItems: 'center', gap: 8 },
+  uploadingText: { color: '#fff', fontSize: 14 },
+  permissionText: { color: '#fff', textAlign: 'center', padding: 32, fontSize: 16 },
+  cancelLink: { color: '#aaa', fontSize: 16, marginTop: 16 },
+  errorText: { color: '#fff', textAlign: 'center', padding: 32, fontSize: 16 },
   button: {
     backgroundColor: '#fff',
     paddingHorizontal: 32,
     paddingVertical: 14,
     borderRadius: 8,
   },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  buttonText: { fontSize: 16, fontWeight: '600' },
 });

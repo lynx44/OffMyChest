@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.seamlessrecorder'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.seamlessrecorder"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  // ExoPlayer — same version as expo-av to avoid classpath conflicts
+  implementation 'com.google.android.exoplayer:exoplayer:2.18.1'
+}
