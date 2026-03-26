@@ -40,6 +40,8 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   private var pendingSeekMs: Long = 0L
   private var loadedChunkCount = 0
   private var isLiveMode = false
+  /** Suppress STATE_ENDED briefly after a seek to avoid false "finished" events */
+  private var suppressEnded = false
 
   init {
     addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -72,13 +74,25 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
 
     exoPlayer.addListener(object : Player.Listener {
       override fun onPlaybackStateChanged(state: Int) {
+        Log.d(TAG, "State: $state, pendingSeek=$pendingSeekMs, suppress=$suppressEnded")
         if (state == Player.STATE_READY && pendingSeekMs > 0) {
           Log.d(TAG, "Applying pending seek: ${pendingSeekMs}ms")
+          suppressEnded = true
           seekTo(pendingSeekMs)
           pendingSeekMs = 0L
+        } else if (state == Player.STATE_READY && suppressEnded) {
+          // Player buffered and is playing after the seek — safe to clear
+          Log.d(TAG, "Seek complete, clearing suppressEnded")
+          suppressEnded = false
         }
         if (state == Player.STATE_ENDED) {
-          if (isLiveMode) {
+          if (suppressEnded) {
+            // Seek landed at or past the end — restart from beginning
+            Log.d(TAG, "Seek landed at end, restarting from beginning")
+            suppressEnded = false
+            exoPlayer.seekTo(0, 0)
+            exoPlayer.playWhenReady = true
+          } else if (isLiveMode) {
             Log.d(TAG, "Reached end of available chunks (live mode — waiting for more)")
           } else {
             Log.d(TAG, "Playback finished")
@@ -148,48 +162,24 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   fun play() { player?.play() }
   fun pause() { player?.pause() }
 
-  /** Returns the absolute position across all chunks in ms */
+  /**
+   * Returns a packed position: windowIndex * 1_000_000 + windowPositionMs.
+   * This avoids needing buffered durations to reconstruct an absolute position.
+   */
   fun getPositionMs(): Long {
     val p = player ?: return 0L
-    val timeline = p.currentTimeline
-    if (timeline.isEmpty) return p.currentPosition
-
-    var totalMs = 0L
-    val window = com.google.android.exoplayer2.Timeline.Window()
-    for (i in 0 until p.currentMediaItemIndex) {
-      timeline.getWindow(i, window)
-      totalMs += window.durationMs
-    }
-    totalMs += p.currentPosition
-    Log.d(TAG, "getPositionMs: $totalMs (window=${p.currentMediaItemIndex}, windowPos=${p.currentPosition})")
-    return totalMs
+    val packed = p.currentMediaItemIndex.toLong() * 1_000_000L + p.currentPosition
+    Log.d(TAG, "getPositionMs: packed=$packed (window=${p.currentMediaItemIndex}, windowPos=${p.currentPosition})")
+    return packed
   }
 
-  /** Seeks to an absolute position across all chunks */
+  /** Seeks to a packed position (windowIndex * 1_000_000 + windowPositionMs) */
   fun seekTo(positionMs: Long) {
     val p = player ?: return
-    val timeline = p.currentTimeline
-    if (timeline.isEmpty) {
-      p.seekTo(positionMs)
-      return
-    }
-
-    var remaining = positionMs
-    val window = com.google.android.exoplayer2.Timeline.Window()
-    for (i in 0 until timeline.windowCount) {
-      timeline.getWindow(i, window)
-      if (remaining < window.durationMs) {
-        Log.d(TAG, "seekTo: ${positionMs}ms → window=$i, offset=${remaining}ms")
-        p.seekTo(i, remaining)
-        return
-      }
-      remaining -= window.durationMs
-    }
-    // Past the end — seek to last window
-    val lastIdx = timeline.windowCount - 1
-    timeline.getWindow(lastIdx, window)
-    Log.d(TAG, "seekTo: ${positionMs}ms → last window=$lastIdx")
-    p.seekTo(lastIdx, window.durationMs)
+    val windowIndex = (positionMs / 1_000_000L).toInt()
+    val windowPos = positionMs % 1_000_000L
+    Log.d(TAG, "seekTo: window=$windowIndex, offset=${windowPos}ms")
+    p.seekTo(windowIndex, windowPos)
   }
 
   /** Append new chunk URLs to the existing player without resetting playback */

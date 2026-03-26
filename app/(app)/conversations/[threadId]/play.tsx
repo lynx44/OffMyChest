@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Pressable,
   StyleSheet,
   Text,
@@ -110,6 +111,15 @@ export default function PlayScreen() {
       }
     };
   }, []);
+
+  // Handle Android hardware back button
+  useEffect(() => {
+    const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+      savePartialProgress().then(() => router.back());
+      return true; // prevent default
+    });
+    return () => handler.remove();
+  }, [savePartialProgress, router]);
 
   useEffect(() => {
     if (!encodedManifest) {
