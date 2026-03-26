@@ -13,6 +13,7 @@ import {
 import { useAuth } from '../../../../src/auth/GoogleAuthProvider';
 import { getContacts } from '../../../../src/contacts/contactStore';
 import { useConversationMessages, ConversationMessage } from '../../../../src/messages/useConversationMessages';
+import { setPlaylist } from '../../../../src/messages/playlistStore';
 import { getWatchStates } from '../../../../src/messages/watchStateStore';
 import { Contact } from '../../../../src/shared/types';
 
@@ -135,6 +136,7 @@ export default function ConversationScreen() {
   }, [loading, messages]);
 
   function handlePlay(msg: ConversationMessage) {
+    setPlaylist(messages.map((m) => m.manifest_url));
     const encoded = encodeParam(msg.manifest_url);
     router.push(`/(app)/conversations/${threadId}/play?manifest=${encoded}`);
   }

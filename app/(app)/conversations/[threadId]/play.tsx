@@ -13,11 +13,16 @@ import {
 import { fetchPublicJson } from '../../../../src/storage/driveApi';
 import { MessageManifest } from '../../../../src/shared/types';
 import { SeamlessPlayerView, SeamlessPlayerRef } from '../../../../modules/seamless-recorder/src';
-import { getWatchState, saveWatchState } from '../../../../src/messages/watchStateStore';
+import { getPlaylist } from '../../../../src/messages/playlistStore';
+import { getWatchState, getWatchStates, saveWatchState } from '../../../../src/messages/watchStateStore';
 
 function decodeParam(encoded: string): string {
   const padded = encoded + '==='.slice((encoded.length + 3) % 4);
   return atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+}
+
+function encodeParam(url: string): string {
+  return btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 function formatDuration(seconds: number): string {
@@ -29,7 +34,7 @@ function formatDuration(seconds: number): string {
 const LIVE_POLL_INTERVAL_MS = 3000;
 
 export default function PlayScreen() {
-  const { manifest: encodedManifest } = useLocalSearchParams<{ manifest: string }>();
+  const { threadId, manifest: encodedManifest } = useLocalSearchParams<{ threadId: string; manifest: string }>();
   const router = useRouter();
 
   const [loadState, setLoadState] = useState<'loading' | 'playing' | 'error'>('loading');
@@ -159,6 +164,15 @@ export default function PlayScreen() {
       return;
     }
 
+    // Reset state for new video (needed when auto-advancing via router.replace)
+    setLoadState('loading');
+    setChunks([]);
+    setPaused(false);
+    setStartPosition(0);
+    setElapsedSeconds(0);
+    elapsedOffsetRef.current = 0;
+    loadedChunkCountRef.current = 0;
+
     const manifestUrl = decodeParam(encodedManifest);
     manifestUrlRef.current = manifestUrl;
 
@@ -201,8 +215,26 @@ export default function PlayScreen() {
   const handlePlaybackFinished = useCallback(async () => {
     if (isLive) return; // Don't exit during live — more chunks may arrive
     await saveCompleted();
+
+    // Find the next unwatched or partially-watched video in the playlist
+    const playlist = getPlaylist();
+    const currentUrl = manifestUrlRef.current;
+    const currentIdx = playlist.indexOf(currentUrl);
+    if (currentIdx >= 0 && currentIdx < playlist.length - 1) {
+      const remaining = playlist.slice(currentIdx + 1);
+      const states = await getWatchStates(remaining);
+      const next = remaining.find((url) => {
+        const ws = states.get(url);
+        return !ws || !ws.completed;
+      });
+      if (next) {
+        router.replace(`/(app)/conversations/${threadId}/play?manifest=${encodeParam(next)}`);
+        return;
+      }
+    }
+
     router.back();
-  }, [saveCompleted, router, isLive]);
+  }, [saveCompleted, router, isLive, threadId]);
 
   const handleGoBack = useCallback(async () => {
     await savePartialProgress();
