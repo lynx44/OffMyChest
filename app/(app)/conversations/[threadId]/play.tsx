@@ -1,7 +1,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -10,7 +11,7 @@ import {
 
 import { fetchPublicJson } from '../../../../src/storage/driveApi';
 import { MessageManifest } from '../../../../src/shared/types';
-import { SeamlessPlayerView } from '../../../../modules/seamless-recorder/src';
+import { SeamlessPlayerView, SeamlessPlayerRef } from '../../../../modules/seamless-recorder/src';
 
 function decodeParam(encoded: string): string {
   const padded = encoded + '==='.slice((encoded.length + 3) % 4);
@@ -31,6 +32,17 @@ export default function PlayScreen() {
   const [error, setError] = useState('');
   const [totalDuration, setTotalDuration] = useState(0);
   const [chunks, setChunks] = useState<string[]>([]);
+  const [paused, setPaused] = useState(false);
+  const playerRef = useRef<SeamlessPlayerRef>(null);
+
+  const togglePlayPause = useCallback(() => {
+    if (paused) {
+      playerRef.current?.play();
+    } else {
+      playerRef.current?.pause();
+    }
+    setPaused((p) => !p);
+  }, [paused]);
 
   useEffect(() => {
     if (!encodedManifest) {
@@ -57,15 +69,18 @@ export default function PlayScreen() {
   return (
     <View style={styles.container}>
       {chunks.length > 0 && (
-        <SeamlessPlayerView
-          style={StyleSheet.absoluteFillObject}
-          chunks={chunks}
-          onPlaybackFinished={() => router.back()}
-          onPlaybackError={(msg) => {
-            setError(msg);
-            setLoadState('error');
-          }}
-        />
+        <Pressable style={StyleSheet.absoluteFillObject} onPress={togglePlayPause}>
+          <SeamlessPlayerView
+            ref={playerRef}
+            style={StyleSheet.absoluteFillObject}
+            chunks={chunks}
+            onPlaybackFinished={() => router.back()}
+            onPlaybackError={(msg) => {
+              setError(msg);
+              setLoadState('error');
+            }}
+          />
+        </Pressable>
       )}
 
       {loadState === 'loading' && (
