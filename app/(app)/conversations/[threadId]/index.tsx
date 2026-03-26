@@ -56,6 +56,8 @@ export default function ConversationScreen() {
   );
 
   const [contactName, setContactName] = useState('');
+  /** 'watched' = completed, 'partial' = started but not finished, undefined = unwatched */
+  const [watchedMap, setWatchedMap] = useState<Map<string, 'watched' | 'partial'>>(new Map());
 
   // Load contact name
   useEffect(() => {
@@ -66,8 +68,21 @@ export default function ConversationScreen() {
     });
   }, [user, contactOutboxUrl]);
 
-  // Refresh when screen comes back into focus
-  useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
+  // Load watch states whenever messages change or screen regains focus
+  const refreshWatchStates = useCallback(async () => {
+    if (messages.length === 0) return;
+    const states = await getWatchStates(messages.map((m) => m.manifest_url));
+    const map = new Map<string, 'watched' | 'partial'>();
+    for (const msg of messages) {
+      const ws = states.get(msg.manifest_url);
+      if (ws?.completed) map.set(msg.manifest_url, 'watched');
+      else if (ws && ws.positionMs > 0) map.set(msg.manifest_url, 'partial');
+    }
+    setWatchedMap(map);
+  }, [messages]);
+
+  // Refresh messages + watch states when screen comes back into focus
+  useFocusEffect(useCallback(() => { refresh(); refreshWatchStates(); }, [refresh, refreshWatchStates]));
 
   // Autoplay on first load: pick the right video based on watch history
   const autoplayDone = useRef(false);
@@ -174,6 +189,17 @@ export default function ConversationScreen() {
                 </View>
               </View>
 
+              {/* Watch status badge */}
+              {watchedMap.get(item.manifest_url) === 'watched' ? (
+                <View style={styles.watchBadge}>
+                  <Text style={styles.watchBadgeText}>Watched</Text>
+                </View>
+              ) : !watchedMap.has(item.manifest_url) && !item.fromMe ? (
+                <View style={[styles.watchBadge, styles.newBadge]}>
+                  <Text style={styles.newBadgeText}>NEW</Text>
+                </View>
+              ) : null}
+
               {/* Meta */}
               <View style={styles.meta}>
                 <Text style={[styles.duration, item.fromMe ? styles.metaMe : styles.metaThem]}>
@@ -253,6 +279,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   playIcon: { color: '#fff', fontSize: 18, marginLeft: 3 },
+
+  watchBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  watchBadgeText: { color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: '600' },
+  newBadge: { backgroundColor: '#007AFF' },
+  newBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
 
   meta: {
     flexDirection: 'row',
