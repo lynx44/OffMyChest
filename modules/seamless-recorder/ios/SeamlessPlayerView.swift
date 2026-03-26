@@ -1,0 +1,300 @@
+import ExpoModulesCore
+import AVFoundation
+import UIKit
+
+class SeamlessPlayerView: ExpoView {
+
+    private static let TAG = "SeamlessPlayer"
+
+    let onPlaybackFinished = EventDispatcher()
+    let onPlaybackError = EventDispatcher()
+
+    private var player: AVQueuePlayer?
+    private var playerLayer: AVPlayerLayer?
+    /// Ordered list of all items ever loaded (AVQueuePlayer removes played items internally)
+    private var allItems: [AVPlayerItem] = []
+    /// URLs corresponding to allItems by index
+    private var allURLs: [URL] = []
+    private var loadedChunkCount = 0
+    private var isLiveMode = false
+    private var pendingSeekMs: Int64 = 0
+    private var suppressEnded = false
+    private var statusObservation: NSKeyValueObservation?
+    private var endObserver: NSObjectProtocol?
+    private var errorObservers: [NSObjectProtocol] = []
+
+    required init(appContext: AppContext?) {
+        super.init(appContext: appContext)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        playerLayer?.frame = bounds
+    }
+
+    override func removeFromSuperview() {
+        releasePlayer()
+        super.removeFromSuperview()
+    }
+
+    // MARK: - Public API
+
+    func loadChunks(_ urls: [String]) {
+        releasePlayer()
+
+        let queuePlayer = AVQueuePlayer()
+        queuePlayer.actionAtItemEnd = .advance
+
+        var items: [AVPlayerItem] = []
+        var itemURLs: [URL] = []
+        for urlString in urls {
+            guard let url = URL(string: urlString) else { continue }
+            let item = AVPlayerItem(url: url)
+            items.append(item)
+            itemURLs.append(url)
+            queuePlayer.insert(item, after: nil)
+        }
+
+        allItems = items
+        allURLs = itemURLs
+        loadedChunkCount = items.count
+
+        let layer = AVPlayerLayer(player: queuePlayer)
+        layer.videoGravity = .resizeAspectFill
+        layer.frame = bounds
+        self.layer.addSublayer(layer)
+        playerLayer = layer
+        player = queuePlayer
+
+        // Observe end-of-item notifications
+        for item in items {
+            observeItemEnd(item)
+        }
+
+        // Observe first item status for pending seek
+        if let firstItem = items.first {
+            observeItemStatus(firstItem)
+        }
+
+        // Observe errors
+        observePlayerErrors(queuePlayer)
+
+        queuePlayer.play()
+        NSLog("[%@] Playing %d chunks", SeamlessPlayerView.TAG, urls.count)
+    }
+
+    func setStartPosition(_ positionMs: Int64) {
+        pendingSeekMs = positionMs
+        NSLog("[%@] startPosition set to %lldms", SeamlessPlayerView.TAG, positionMs)
+    }
+
+    func play() {
+        player?.play()
+    }
+
+    func pause() {
+        player?.pause()
+    }
+
+    func getPositionMs() -> Int64 {
+        guard let player = player, let currentItem = player.currentItem else { return 0 }
+        let currentIndex = allItems.firstIndex(where: { $0 === currentItem }) ?? 0
+        let currentTimeMs = Int64(CMTimeGetSeconds(player.currentTime()) * 1000)
+        let packed = Int64(currentIndex) * 1_000_000 + max(0, currentTimeMs)
+        return packed
+    }
+
+    func getElapsedMs() -> Int64 {
+        guard let player = player, let currentItem = player.currentItem else { return 0 }
+        let currentIndex = allItems.firstIndex(where: { $0 === currentItem }) ?? 0
+        var totalMs: Int64 = 0
+        for i in 0..<currentIndex {
+            let duration = CMTimeGetSeconds(allItems[i].duration)
+            if duration.isFinite && duration > 0 {
+                totalMs += Int64(duration * 1000)
+            }
+        }
+        let currentTimeMs = Int64(CMTimeGetSeconds(player.currentTime()) * 1000)
+        totalMs += max(0, currentTimeMs)
+        return totalMs
+    }
+
+    /// Seeks to a packed position (windowIndex * 1_000_000 + windowPositionMs).
+    /// Seeks to the START of the chunk because Google Drive URLs don't support
+    /// HTTP Range requests.
+    func seekTo(_ positionMs: Int64) {
+        guard let player = player else { return }
+        let windowIndex = Int(positionMs / 1_000_000)
+        guard windowIndex < allURLs.count else { return }
+
+        NSLog("[%@] seekTo: window=%d (start of chunk)", SeamlessPlayerView.TAG, windowIndex)
+        suppressEnded = true
+
+        // AVQueuePlayer removes played items, so we must rebuild the queue
+        // from the target index. AVPlayerItems can't be reused after removal.
+        player.removeAllItems()
+        removeEndObservers()
+
+        var newItems: [AVPlayerItem] = []
+        for i in 0..<allURLs.count {
+            if i < windowIndex {
+                // Keep placeholder for index tracking but don't add to player
+                // Re-create item so allItems stays consistent
+                let item = AVPlayerItem(url: allURLs[i])
+                allItems[i] = item
+                newItems.append(item)
+            } else {
+                let item = AVPlayerItem(url: allURLs[i])
+                allItems[i] = item
+                newItems.append(item)
+                player.insert(item, after: player.items().last)
+                observeItemEnd(item)
+            }
+        }
+
+        player.seek(to: .zero)
+        player.play()
+
+        // Observe first playable item status to clear suppressEnded
+        if windowIndex < allItems.count {
+            observeItemStatus(allItems[windowIndex])
+        }
+    }
+
+    func appendChunks(_ urls: [String]) {
+        guard let player = player else { return }
+        let wasEmpty = player.items().isEmpty
+        let previousCount = loadedChunkCount
+
+        for urlString in urls {
+            guard let url = URL(string: urlString) else { continue }
+            let item = AVPlayerItem(url: url)
+            observeItemEnd(item)
+            player.insert(item, after: player.items().last)
+            allItems.append(item)
+            allURLs.append(url)
+        }
+        loadedChunkCount += urls.count
+        NSLog("[%@] Appended %d chunks (total=%d, wasEmpty=%@)",
+              SeamlessPlayerView.TAG, urls.count, loadedChunkCount, wasEmpty ? "true" : "false")
+
+        if wasEmpty {
+            player.play()
+            NSLog("[%@] Resuming playback from chunk %d", SeamlessPlayerView.TAG, previousCount)
+        }
+    }
+
+    func setLiveMode(_ live: Bool) {
+        isLiveMode = live
+        NSLog("[%@] liveMode=%@", SeamlessPlayerView.TAG, live ? "true" : "false")
+    }
+
+    func getLoadedChunkCount() -> Int {
+        return loadedChunkCount
+    }
+
+    // MARK: - Observers
+
+    private func observeItemEnd(_ item: AVPlayerItem) {
+        let observer = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleItemDidPlayToEnd(notification)
+        }
+        errorObservers.append(observer)
+    }
+
+    private func observeItemStatus(_ item: AVPlayerItem) {
+        statusObservation?.invalidate()
+        statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                if item.status == .readyToPlay {
+                    if self.pendingSeekMs > 0 {
+                        NSLog("[%@] Applying pending seek: %lldms", SeamlessPlayerView.TAG, self.pendingSeekMs)
+                        self.suppressEnded = true
+                        let seekMs = self.pendingSeekMs
+                        self.pendingSeekMs = 0
+                        self.seekTo(seekMs)
+                    } else if self.suppressEnded {
+                        NSLog("[%@] Seek complete, clearing suppressEnded", SeamlessPlayerView.TAG)
+                        self.suppressEnded = false
+                    }
+                    self.statusObservation?.invalidate()
+                    self.statusObservation = nil
+                } else if item.status == .failed {
+                    let msg = item.error?.localizedDescription ?? "Playback error"
+                    NSLog("[%@] Item failed: %@", SeamlessPlayerView.TAG, msg)
+                    self.onPlaybackError(["message": msg])
+                }
+            }
+        }
+    }
+
+    private func observePlayerErrors(_ player: AVQueuePlayer) {
+        let observer = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            let msg = error?.localizedDescription ?? "Playback error"
+            NSLog("[%@] Playback error: %@", SeamlessPlayerView.TAG, msg)
+            self?.onPlaybackError(["message": msg])
+        }
+        errorObservers.append(observer)
+    }
+
+    private func handleItemDidPlayToEnd(_ notification: Notification) {
+        guard let finishedItem = notification.object as? AVPlayerItem else { return }
+
+        if suppressEnded {
+            // Seek landed at or past the end — restart from beginning
+            NSLog("[%@] Seek landed at end, restarting from beginning", SeamlessPlayerView.TAG)
+            suppressEnded = false
+            player?.seek(to: .zero)
+            player?.play()
+            return
+        }
+
+        if isLiveMode {
+            NSLog("[%@] Reached end of available chunks (live mode — waiting for more)", SeamlessPlayerView.TAG)
+            return
+        }
+
+        // Check if this was the last item
+        let isLast = finishedItem === allItems.last || player?.items().isEmpty == true
+        if isLast {
+            NSLog("[%@] Playback finished", SeamlessPlayerView.TAG)
+            onPlaybackFinished([:])
+        }
+    }
+
+    private func removeEndObservers() {
+        for observer in errorObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        errorObservers.removeAll()
+    }
+
+    // MARK: - Cleanup
+
+    private func releasePlayer() {
+        statusObservation?.invalidate()
+        statusObservation = nil
+        removeEndObservers()
+        player?.pause()
+        player?.removeAllItems()
+        playerLayer?.removeFromSuperlayer()
+        playerLayer = nil
+        player = nil
+        allItems.removeAll()
+        allURLs.removeAll()
+        loadedChunkCount = 0
+        isLiveMode = false
+        suppressEnded = false
+        pendingSeekMs = 0
+    }
+}

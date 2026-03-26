@@ -1,9 +1,15 @@
 {
-  "platforms": ["android"],
+  "platforms": ["android", "apple"],
   "android": {
     "modules": [
       "expo.modules.seamlessrecorder.SeamlessRecorderModule",
       "expo.modules.seamlessrecorder.SeamlessPlayerModule"
+    ]
+  },
+  "apple": {
+    "modules": [
+      "SeamlessRecorderModule",
+      "SeamlessPlayerModule"
     ]
   }
 }
