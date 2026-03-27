@@ -32,6 +32,7 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
 
   private val onPlaybackFinished by EventDispatcher()
   private val onPlaybackError by EventDispatcher()
+  private val onLiveCaughtUp by EventDispatcher()
 
   private var player: ExoPlayer? = null
   private var concatenatingSource: ConcatenatingMediaSource? = null
@@ -94,6 +95,11 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
             exoPlayer.playWhenReady = true
           } else if (isLiveMode) {
             Log.d(TAG, "Reached end of available chunks (live mode — waiting for more)")
+            if (exoPlayer.playbackParameters.speed != 1f) {
+              exoPlayer.setPlaybackSpeed(1f)
+              Log.d(TAG, "Live caught up — reset speed to 1x")
+              onLiveCaughtUp(mapOf<String, Any>())
+            }
           } else {
             Log.d(TAG, "Playback finished")
             onPlaybackFinished(mapOf<String, Any>())

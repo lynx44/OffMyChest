@@ -20,6 +20,7 @@ interface NativeProps {
   liveMode?: boolean;
   onPlaybackFinished?: (event: { nativeEvent: Record<string, never> }) => void;
   onPlaybackError?: (event: { nativeEvent: { message: string } }) => void;
+  onLiveCaughtUp?: (event: { nativeEvent: Record<string, never> }) => void;
 }
 
 const NativeView = requireNativeView<NativeProps>('ExpoSeamlessPlayer');
@@ -31,10 +32,11 @@ interface Props {
   liveMode?: boolean;
   onPlaybackFinished?: () => void;
   onPlaybackError?: (message: string) => void;
+  onLiveCaughtUp?: () => void;
 }
 
 export const SeamlessPlayerView = forwardRef<SeamlessPlayerRef, Props>(
-  function SeamlessPlayerView({ style, chunks, startPosition, liveMode, onPlaybackFinished, onPlaybackError }, ref) {
+  function SeamlessPlayerView({ style, chunks, startPosition, liveMode, onPlaybackFinished, onPlaybackError, onLiveCaughtUp }, ref) {
     const nativeRef = useRef(null);
 
     useImperativeHandle(ref, () => ({
@@ -73,6 +75,7 @@ export const SeamlessPlayerView = forwardRef<SeamlessPlayerRef, Props>(
         liveMode={liveMode}
         onPlaybackFinished={onPlaybackFinished ? () => onPlaybackFinished() : undefined}
         onPlaybackError={onPlaybackError ? (e) => onPlaybackError(e.nativeEvent.message) : undefined}
+        onLiveCaughtUp={onLiveCaughtUp ? () => onLiveCaughtUp() : undefined}
       />
     );
   }

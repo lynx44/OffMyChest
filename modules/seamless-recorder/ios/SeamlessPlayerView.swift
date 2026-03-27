@@ -8,6 +8,7 @@ class SeamlessPlayerView: ExpoView {
 
     let onPlaybackFinished = EventDispatcher()
     let onPlaybackError = EventDispatcher()
+    let onLiveCaughtUp = EventDispatcher()
 
     private var player: AVQueuePlayer?
     private var playerLayer: AVPlayerLayer?
@@ -266,6 +267,10 @@ class SeamlessPlayerView: ExpoView {
 
         if isLiveMode {
             NSLog("[%@] Reached end of available chunks (live mode — waiting for more)", SeamlessPlayerView.TAG)
+            if let player = player, player.rate > 1.0 {
+                NSLog("[%@] Live caught up — reset speed to 1x", SeamlessPlayerView.TAG)
+                onLiveCaughtUp([:])
+            }
             return
         }
 

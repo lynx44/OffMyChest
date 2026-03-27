@@ -46,6 +46,7 @@ export default function PlayScreen() {
   const [startPosition, setStartPosition] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [speed, setSpeed] = useState(1);
+  const speedRef = useRef(1);
   const playerRef = useRef<SeamlessPlayerRef>(null);
   const manifestUrlRef = useRef('');
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -58,6 +59,7 @@ export default function PlayScreen() {
   const cycleSpeed = useCallback(() => {
     const nextIdx = (SPEEDS.indexOf(speed) + 1) % SPEEDS.length;
     const next = SPEEDS[nextIdx];
+    speedRef.current = next;
     setSpeed(next);
     playerRef.current?.setSpeed(next);
   }, [speed]);
@@ -139,6 +141,13 @@ export default function PlayScreen() {
     };
   }, []);
 
+  // Re-apply playback speed when a new video starts playing
+  useEffect(() => {
+    if (loadState === 'playing' && speedRef.current !== 1) {
+      playerRef.current?.setSpeed(speedRef.current);
+    }
+  }, [loadState]);
+
   // Poll native player for elapsed time, adding offset for skipped chunks
   useEffect(() => {
     if (loadState !== 'playing') return;
@@ -177,7 +186,6 @@ export default function PlayScreen() {
     setLoadState('loading');
     setChunks([]);
     setPaused(false);
-    setSpeed(1);
     setStartPosition(0);
     setElapsedSeconds(0);
     elapsedOffsetRef.current = 0;
@@ -265,6 +273,10 @@ export default function PlayScreen() {
             onPlaybackError={(msg) => {
               setError(msg);
               setLoadState('error');
+            }}
+            onLiveCaughtUp={() => {
+              speedRef.current = 1;
+              setSpeed(1);
             }}
           />
         </Pressable>

@@ -5,7 +5,7 @@ public class SeamlessPlayerModule: Module {
         Name("ExpoSeamlessPlayer")
 
         View(SeamlessPlayerView.self) {
-            Events("onPlaybackFinished", "onPlaybackError")
+            Events("onPlaybackFinished", "onPlaybackError", "onLiveCaughtUp")
 
             Prop("chunks") { (view: SeamlessPlayerView, chunks: [String]?) in
                 if let chunks = chunks {

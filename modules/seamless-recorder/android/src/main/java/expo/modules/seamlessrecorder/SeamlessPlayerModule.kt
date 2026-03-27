@@ -9,7 +9,7 @@ class SeamlessPlayerModule : Module() {
     Name("ExpoSeamlessPlayer")
 
     View(SeamlessPlayerView::class) {
-      Events("onPlaybackFinished", "onPlaybackError")
+      Events("onPlaybackFinished", "onPlaybackError", "onLiveCaughtUp")
 
       Prop("chunks") { view: SeamlessPlayerView, chunks: List<String> ->
         view.loadChunks(chunks)
