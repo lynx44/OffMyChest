@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   AppState,
   BackHandler,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
@@ -56,7 +57,11 @@ export default function PlayScreen() {
   const [speed, setSpeed] = useState(1);
   const [notesVisible, setNotesVisible] = useState(false);
   const [hasNotes, setHasNotes] = useState(false);
+  const [scrubFraction, setScrubFraction] = useState(0);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const scrubBarWidthRef = useRef(0);
   const speedRef = useRef(1);
+  const pausedRef = useRef(false);
   const playerRef = useRef<SeamlessPlayerRef>(null);
   const manifestUrlRef = useRef('');
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -85,13 +90,14 @@ export default function PlayScreen() {
   }, [speed]);
 
   const togglePlayPause = useCallback(() => {
-    if (paused) {
+    if (pausedRef.current) {
       playerRef.current?.play();
     } else {
       playerRef.current?.pause();
     }
-    setPaused((p) => !p);
-  }, [paused]);
+    pausedRef.current = !pausedRef.current;
+    setPaused(pausedRef.current);
+  }, []);
 
   /** Find which video boundary contains a given chunk window index */
   const findBoundary = useCallback((windowIdx: number): { boundary: VideoBoundary; videoIdx: number } | null => {
@@ -258,6 +264,9 @@ export default function PlayScreen() {
           const elapsed = Math.floor((relWindowIdx * chunkDurMs + windowOffset) / 1000);
           setElapsedSeconds(elapsed);
           setTotalDuration(boundary.duration);
+          if (!isSeeking && boundary.duration > 0) {
+            setScrubFraction(elapsed / boundary.duration);
+          }
         }
       } catch {}
     }, 500);
@@ -267,7 +276,7 @@ export default function PlayScreen() {
         elapsedTimerRef.current = null;
       }
     };
-  }, [loadState, paused, findBoundary]);
+  }, [loadState, paused, isSeeking, findBoundary]);
 
   // When app returns to foreground, re-sync live video:
   // - restart polling if it was throttled in background
@@ -480,6 +489,41 @@ export default function PlayScreen() {
     router.back();
   }, [savePartialProgress, router]);
 
+  const scrubPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        setIsSeeking(true);
+        const fraction = Math.max(0, Math.min(1, evt.nativeEvent.locationX / (scrubBarWidthRef.current || 1)));
+        setScrubFraction(fraction);
+      },
+      onPanResponderMove: (evt) => {
+        const fraction = Math.max(0, Math.min(1, evt.nativeEvent.locationX / (scrubBarWidthRef.current || 1)));
+        setScrubFraction(fraction);
+      },
+      onPanResponderRelease: async (evt) => {
+        const fraction = Math.max(0, Math.min(1, evt.nativeEvent.locationX / (scrubBarWidthRef.current || 1)));
+        setScrubFraction(fraction);
+        setIsSeeking(false);
+
+        // Find current boundary and seek to the right chunk
+        const boundary = videoBoundariesRef.current[lastVideoIdxRef.current];
+        if (!boundary || boundary.count === 0) return;
+
+        const targetChunk = Math.min(Math.floor(fraction * boundary.count), boundary.count - 1);
+        const globalWindowIdx = boundary.startIdx + targetChunk;
+        try {
+          await playerRef.current?.seekToChunk(globalWindowIdx);
+          if (pausedRef.current) playerRef.current?.pause();
+        } catch {}
+      },
+      onPanResponderTerminate: () => {
+        setIsSeeking(false);
+      },
+    }),
+  ).current;
+
   return (
     <View style={styles.container}>
       {chunks.length > 0 && (
@@ -548,6 +592,23 @@ export default function PlayScreen() {
             visible={notesVisible}
             onToggle={() => setNotesVisible((v) => !v)}
           />
+          {!isLive && totalDuration > 0 && (
+            <View style={styles.scrubberContainer}>
+              <View
+                style={styles.scrubberTrack}
+                onLayout={(e) => { scrubBarWidthRef.current = e.nativeEvent.layout.width; }}
+                {...scrubPanResponder.panHandlers}
+              >
+                <View style={[styles.scrubberFill, { width: `${scrubFraction * 100}%` }]} />
+                <View
+                  style={[
+                    styles.scrubberThumb,
+                    { transform: [{ translateX: scrubFraction * scrubBarWidthRef.current - 8 }] },
+                  ]}
+                />
+              </View>
+            </View>
+          )}
         </>
       )}
     </View>
@@ -608,5 +669,39 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+  scrubberContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    paddingBottom: 36,
+    paddingTop: 20,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    zIndex: 10,
+  },
+  scrubberTrack: {
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 2,
+    justifyContent: 'center',
+  },
+  scrubberFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    height: 4,
+    backgroundColor: '#fff',
+    borderRadius: 2,
+  },
+  scrubberThumb: {
+    position: 'absolute',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    top: -6,
+    left: 0,
   },
 });
