@@ -60,6 +60,8 @@ export default function PlayScreen() {
   const [scrubFraction, setScrubFraction] = useState(0);
   const [isSeeking, setIsSeeking] = useState(false);
   const scrubBarWidthRef = useRef(0);
+  const scrubBarPageXRef = useRef(0);
+  const scrubTrackRef = useRef<View>(null);
   const speedRef = useRef(1);
   const pausedRef = useRef(false);
   const playerRef = useRef<SeamlessPlayerRef>(null);
@@ -494,16 +496,20 @@ export default function PlayScreen() {
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (evt) => {
+        // Capture the track's screen position at the start of each gesture
+        scrubTrackRef.current?.measure((_x, _y, _w, _h, pageX) => {
+          scrubBarPageXRef.current = pageX;
+        });
         setIsSeeking(true);
-        const fraction = Math.max(0, Math.min(1, evt.nativeEvent.locationX / (scrubBarWidthRef.current || 1)));
+        const fraction = Math.max(0, Math.min(1, (evt.nativeEvent.pageX - scrubBarPageXRef.current) / (scrubBarWidthRef.current || 1)));
         setScrubFraction(fraction);
       },
       onPanResponderMove: (evt) => {
-        const fraction = Math.max(0, Math.min(1, evt.nativeEvent.locationX / (scrubBarWidthRef.current || 1)));
+        const fraction = Math.max(0, Math.min(1, (evt.nativeEvent.pageX - scrubBarPageXRef.current) / (scrubBarWidthRef.current || 1)));
         setScrubFraction(fraction);
       },
       onPanResponderRelease: async (evt) => {
-        const fraction = Math.max(0, Math.min(1, evt.nativeEvent.locationX / (scrubBarWidthRef.current || 1)));
+        const fraction = Math.max(0, Math.min(1, (evt.nativeEvent.pageX - scrubBarPageXRef.current) / (scrubBarWidthRef.current || 1)));
         setScrubFraction(fraction);
         setIsSeeking(false);
 
@@ -595,6 +601,7 @@ export default function PlayScreen() {
           {!isLive && totalDuration > 0 && (
             <View style={styles.scrubberContainer}>
               <View
+                ref={scrubTrackRef}
                 style={styles.scrubberTrack}
                 onLayout={(e) => { scrubBarWidthRef.current = e.nativeEvent.layout.width; }}
                 {...scrubPanResponder.panHandlers}
@@ -684,7 +691,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   scrubberTrack: {
-    height: 36,
+    height: 56,
     justifyContent: 'center',
   },
   scrubberTrackInner: {
