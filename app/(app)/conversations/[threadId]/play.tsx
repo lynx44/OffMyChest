@@ -742,6 +742,7 @@ const styles = StyleSheet.create({
     marginTop: -2,
   },
   scrubberTrack: {
+    flex: 1,
     height: 56, // large touch target; thumb top = (56 - thumbSize) / 2
     justifyContent: 'center',
   },
