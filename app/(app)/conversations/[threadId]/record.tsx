@@ -21,6 +21,8 @@ import {
   SeamlessRecorderRef,
   ChunkReadyEvent,
 } from '../../../../modules/seamless-recorder/src';
+import { NotesOverlay, NotesToggleButton } from '../../../../src/notes/NotesOverlay';
+import { getNotes } from '../../../../src/notes/notesStore';
 
 export default function RecordScreen() {
   const { threadId, groupId } = useLocalSearchParams<{
@@ -37,6 +39,8 @@ export default function RecordScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [notesVisible, setNotesVisible] = useState(false);
+  const [hasNotes, setHasNotes] = useState(false);
 
   const recorderRef = useRef<SeamlessRecorderRef>(null);
   const messageIdRef = useRef<string>('');
@@ -50,6 +54,13 @@ export default function RecordScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
+
+  // Check if thread has notes
+  useEffect(() => {
+    if (threadId) {
+      getNotes(threadId).then((n) => setHasNotes(n.length > 0));
+    }
+  }, [threadId]);
 
   if (!permission || !micPermission) {
     return <View style={styles.container} />;
@@ -214,13 +225,26 @@ export default function RecordScreen() {
             <Text style={styles.cancelText}>Cancel</Text>
           </TouchableOpacity>
 
-          {isRecording && (
-            <View style={styles.recordingIndicator}>
-              <View style={styles.recordingDot} />
-              <Text style={styles.timerText}>{formatDuration(elapsedSeconds)}</Text>
-            </View>
-          )}
+          <View style={styles.topRight}>
+            <NotesToggleButton
+              visible={notesVisible}
+              onToggle={() => setNotesVisible((v) => !v)}
+              hasNotes={hasNotes}
+            />
+            {isRecording && (
+              <View style={styles.recordingIndicator}>
+                <View style={styles.recordingDot} />
+                <Text style={styles.timerText}>{formatDuration(elapsedSeconds)}</Text>
+              </View>
+            )}
+          </View>
         </View>
+
+        <NotesOverlay
+          threadId={threadId}
+          visible={notesVisible}
+          onToggle={() => setNotesVisible((v) => !v)}
+        />
 
         {/* Bottom controls */}
         <View style={styles.bottomBar}>
@@ -276,6 +300,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   cancelText: { color: '#fff', fontSize: 16, fontWeight: '500' },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   recordingIndicator: {
     flexDirection: 'row',
     alignItems: 'center',

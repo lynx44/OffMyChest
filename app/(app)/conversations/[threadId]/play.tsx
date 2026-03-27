@@ -15,6 +15,8 @@ import { MessageManifest } from '../../../../src/shared/types';
 import { SeamlessPlayerView, SeamlessPlayerRef } from '../../../../modules/seamless-recorder/src';
 import { getPlaylist } from '../../../../src/messages/playlistStore';
 import { getWatchState, getWatchStates, saveWatchState } from '../../../../src/messages/watchStateStore';
+import { NotesOverlay, NotesToggleButton } from '../../../../src/notes/NotesOverlay';
+import { getNotes } from '../../../../src/notes/notesStore';
 
 function decodeParam(encoded: string): string {
   const padded = encoded + '==='.slice((encoded.length + 3) % 4);
@@ -46,6 +48,8 @@ export default function PlayScreen() {
   const [startPosition, setStartPosition] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [speed, setSpeed] = useState(1);
+  const [notesVisible, setNotesVisible] = useState(false);
+  const [hasNotes, setHasNotes] = useState(false);
   const speedRef = useRef(1);
   const playerRef = useRef<SeamlessPlayerRef>(null);
   const manifestUrlRef = useRef('');
@@ -140,6 +144,13 @@ export default function PlayScreen() {
       }
     };
   }, []);
+
+  // Check if thread has notes
+  useEffect(() => {
+    if (threadId) {
+      getNotes(threadId).then((n) => setHasNotes(n.length > 0));
+    }
+  }, [threadId]);
 
   // Re-apply playback speed when a new video starts playing
   useEffect(() => {
@@ -299,26 +310,38 @@ export default function PlayScreen() {
       )}
 
       {loadState === 'playing' && (
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={handleGoBack}>
-            <Text style={styles.closeText}>✕</Text>
-          </TouchableOpacity>
-          <View style={styles.topRight}>
-            {isLive && (
-              <View style={styles.liveBadge}>
-                <View style={styles.liveDot} />
-                <Text style={styles.liveText}>LIVE</Text>
-              </View>
-            )}
-            <TouchableOpacity onPress={cycleSpeed} style={styles.speedBadge}>
-              <Text style={styles.speedText}>{speed === 1 ? '1x' : `${speed}x`}</Text>
+        <>
+          <View style={styles.topBar}>
+            <TouchableOpacity onPress={handleGoBack}>
+              <Text style={styles.closeText}>✕</Text>
             </TouchableOpacity>
-            <Text style={styles.durationText}>
-              {formatDuration(elapsedSeconds)}
-              {!isLive && totalDuration > 0 ? ` / ${formatDuration(totalDuration)}` : ''}
-            </Text>
+            <View style={styles.topRight}>
+              {isLive && (
+                <View style={styles.liveBadge}>
+                  <View style={styles.liveDot} />
+                  <Text style={styles.liveText}>LIVE</Text>
+                </View>
+              )}
+              <NotesToggleButton
+                visible={notesVisible}
+                onToggle={() => setNotesVisible((v) => !v)}
+                hasNotes={hasNotes}
+              />
+              <TouchableOpacity onPress={cycleSpeed} style={styles.speedBadge}>
+                <Text style={styles.speedText}>{speed === 1 ? '1x' : `${speed}x`}</Text>
+              </TouchableOpacity>
+              <Text style={styles.durationText}>
+                {formatDuration(elapsedSeconds)}
+                {!isLive && totalDuration > 0 ? ` / ${formatDuration(totalDuration)}` : ''}
+              </Text>
+            </View>
           </View>
-        </View>
+          <NotesOverlay
+            threadId={threadId}
+            visible={notesVisible}
+            onToggle={() => setNotesVisible((v) => !v)}
+          />
+        </>
       )}
     </View>
   );
