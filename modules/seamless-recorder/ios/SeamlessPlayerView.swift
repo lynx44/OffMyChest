@@ -2,6 +2,73 @@ import ExpoModulesCore
 import AVFoundation
 import UIKit
 
+// MARK: - Chunk Cache
+
+/// Downloads remote chunks to local temp files so AVQueuePlayer reads from disk
+/// instead of streaming, eliminating network latency at chunk boundaries.
+private class ChunkCache {
+    static let shared = ChunkCache()
+    private let cacheDir: URL
+    private let session: URLSession
+    private var pending: [URL: URLSessionDownloadTask] = [:]
+    private var cached: [URL: URL] = [:]  // remote URL → local file URL
+    private let queue = DispatchQueue(label: "ChunkCache")
+
+    init() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("chunk_cache")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        cacheDir = dir
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 4
+        session = URLSession(configuration: config)
+    }
+
+    /// Returns local file URL if cached, otherwise nil
+    func localURL(for remote: URL) -> URL? {
+        queue.sync { cached[remote] }
+    }
+
+    /// Start downloading a chunk in the background
+    func prefetch(_ remote: URL) {
+        queue.sync {
+            if cached[remote] != nil || pending[remote] != nil { return }
+            let task = session.downloadTask(with: remote) { [weak self] tmpURL, _, error in
+                guard let self = self, let tmpURL = tmpURL, error == nil else { return }
+                let dest = self.cacheDir.appendingPathComponent(UUID().uuidString + ".mp4")
+                try? FileManager.default.moveItem(at: tmpURL, to: dest)
+                self.queue.sync {
+                    self.cached[remote] = dest
+                    self.pending.removeValue(forKey: remote)
+                }
+            }
+            pending[remote] = task
+            task.resume()
+        }
+    }
+
+    /// Prefetch multiple URLs
+    func prefetchAll(_ urls: [URL]) {
+        for url in urls { prefetch(url) }
+    }
+
+    func cancelAll() {
+        queue.sync {
+            for (_, task) in pending { task.cancel() }
+            pending.removeAll()
+        }
+    }
+
+    func clear() {
+        cancelAll()
+        queue.sync {
+            for (_, local) in cached {
+                try? FileManager.default.removeItem(at: local)
+            }
+            cached.removeAll()
+        }
+    }
+}
+
 class SeamlessPlayerView: ExpoView {
 
     private static let TAG = "SeamlessPlayer"
@@ -23,6 +90,7 @@ class SeamlessPlayerView: ExpoView {
     private var statusObservation: NSKeyValueObservation?
     private var endObserver: NSObjectProtocol?
     private var errorObservers: [NSObjectProtocol] = []
+    private let chunkCache = ChunkCache.shared
 
     required init(appContext: AppContext?) {
         super.init(appContext: appContext)
@@ -38,10 +106,22 @@ class SeamlessPlayerView: ExpoView {
         super.removeFromSuperview()
     }
 
+    /// Create an AVPlayerItem from a cached local file if available, else stream from remote
+    private func makeItem(url: URL) -> AVPlayerItem {
+        let playURL = chunkCache.localURL(for: url) ?? url
+        let item = AVPlayerItem(url: playURL)
+        item.preferredForwardBufferDuration = 30
+        return item
+    }
+
     // MARK: - Public API
 
     func loadChunks(_ urls: [String]) {
         releasePlayer()
+
+        // Start prefetching all chunks to local disk
+        let remoteURLs = urls.compactMap { URL(string: $0) }
+        chunkCache.prefetchAll(remoteURLs)
 
         let queuePlayer = AVQueuePlayer()
         queuePlayer.actionAtItemEnd = .advance
@@ -50,7 +130,7 @@ class SeamlessPlayerView: ExpoView {
         var itemURLs: [URL] = []
         for urlString in urls {
             guard let url = URL(string: urlString) else { continue }
-            let item = AVPlayerItem(url: url)
+            let item = makeItem(url: url)
             items.append(item)
             itemURLs.append(url)
             queuePlayer.insert(item, after: nil)
@@ -144,13 +224,11 @@ class SeamlessPlayerView: ExpoView {
         var newItems: [AVPlayerItem] = []
         for i in 0..<allURLs.count {
             if i < windowIndex {
-                // Keep placeholder for index tracking but don't add to player
-                // Re-create item so allItems stays consistent
-                let item = AVPlayerItem(url: allURLs[i])
+                let item = makeItem(url: allURLs[i])
                 allItems[i] = item
                 newItems.append(item)
             } else {
-                let item = AVPlayerItem(url: allURLs[i])
+                let item = makeItem(url: allURLs[i])
                 allItems[i] = item
                 newItems.append(item)
                 player.insert(item, after: player.items().last)
@@ -172,9 +250,12 @@ class SeamlessPlayerView: ExpoView {
         let wasEmpty = player.items().isEmpty
         let previousCount = loadedChunkCount
 
+        // Prefetch new chunks
+        chunkCache.prefetchAll(urls.compactMap { URL(string: $0) })
+
         for urlString in urls {
             guard let url = URL(string: urlString) else { continue }
-            let item = AVPlayerItem(url: url)
+            let item = makeItem(url: url)
             observeItemEnd(item)
             player.insert(item, after: player.items().last)
             allItems.append(item)
@@ -295,6 +376,7 @@ class SeamlessPlayerView: ExpoView {
         statusObservation?.invalidate()
         statusObservation = nil
         removeEndObservers()
+        chunkCache.cancelAll()
         player?.pause()
         player?.removeAllItems()
         playerLayer?.removeFromSuperlayer()

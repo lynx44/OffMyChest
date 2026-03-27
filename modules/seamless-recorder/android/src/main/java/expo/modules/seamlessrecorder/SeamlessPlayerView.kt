@@ -6,12 +6,16 @@ import android.graphics.SurfaceTexture
 import android.net.Uri
 import android.util.Log
 import android.view.TextureView
+import com.google.android.exoplayer2.DefaultLoadControl
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.source.ConcatenatingMediaSource
 import com.google.android.exoplayer2.source.ProgressiveMediaSource
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
+import com.google.android.exoplayer2.upstream.cache.CacheDataSource
+import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor
+import com.google.android.exoplayer2.upstream.cache.SimpleCache
 import com.google.android.exoplayer2.video.VideoSize
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
@@ -28,6 +32,18 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
 
   companion object {
     private const val TAG = "SeamlessPlayer"
+    private const val CACHE_SIZE_BYTES = 200L * 1024 * 1024 // 200 MB
+    @Volatile private var cache: SimpleCache? = null
+
+    private fun getCache(context: Context): SimpleCache {
+      return cache ?: synchronized(this) {
+        cache ?: SimpleCache(
+          java.io.File(context.cacheDir, "exo_chunk_cache"),
+          LeastRecentlyUsedCacheEvictor(CACHE_SIZE_BYTES),
+          com.google.android.exoplayer2.database.StandaloneDatabaseProvider(context)
+        ).also { cache = it }
+      }
+    }
   }
 
   private val onPlaybackFinished by EventDispatcher()
@@ -36,7 +52,7 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
 
   private var player: ExoPlayer? = null
   private var concatenatingSource: ConcatenatingMediaSource? = null
-  private var dataSourceFactory: DefaultHttpDataSource.Factory? = null
+  private var cacheDataSourceFactory: CacheDataSource.Factory? = null
   private val textureView = TextureView(context)
   private var pendingSeekMs: Long = 0L
   private var loadedChunkCount = 0
@@ -55,18 +71,32 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   fun loadChunks(urls: List<String>) {
     releasePlayer()
 
-    val exoPlayer = ExoPlayer.Builder(context).build()
+    val loadControl = DefaultLoadControl.Builder()
+      .setBufferDurationsMs(
+        /* minBufferMs */ 30_000,
+        /* maxBufferMs */ 120_000,
+        /* bufferForPlaybackMs */ 1_500,
+        /* bufferForPlaybackAfterRebufferMs */ 3_000
+      )
+      .build()
+
+    val exoPlayer = ExoPlayer.Builder(context)
+      .setLoadControl(loadControl)
+      .build()
     exoPlayer.setVideoTextureView(textureView)
 
-    val dsFactory = DefaultHttpDataSource.Factory()
+    val httpFactory = DefaultHttpDataSource.Factory()
       .setConnectTimeoutMs(15_000)
       .setReadTimeoutMs(15_000)
       .setAllowCrossProtocolRedirects(true)
-    dataSourceFactory = dsFactory
+    val cachedFactory = CacheDataSource.Factory()
+      .setCache(getCache(context))
+      .setUpstreamDataSourceFactory(httpFactory)
+    cacheDataSourceFactory = cachedFactory
 
     val concatenating = ConcatenatingMediaSource()
     for (url in urls) {
-      val mediaSource = ProgressiveMediaSource.Factory(dsFactory)
+      val mediaSource = ProgressiveMediaSource.Factory(cachedFactory)
         .createMediaSource(MediaItem.fromUri(Uri.parse(url)))
       concatenating.addMediaSource(mediaSource)
     }
@@ -214,7 +244,7 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   fun appendChunks(urls: List<String>) {
     val p = player ?: return
     val concat = concatenatingSource ?: return
-    val factory = dataSourceFactory ?: return
+    val factory = cacheDataSourceFactory ?: return
     val wasEnded = p.playbackState == Player.STATE_ENDED
 
     var added = 0
@@ -247,7 +277,7 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     player?.release()
     player = null
     concatenatingSource = null
-    dataSourceFactory = null
+    cacheDataSourceFactory = null
     loadedChunkCount = 0
     isLiveMode = false
   }
