@@ -15,6 +15,10 @@ public class SeamlessRecorderModule: Module {
                 view.setQuality(quality ?? "480p")
             }
 
+            Prop("sessionId") { (view: SeamlessRecorderView, sessionId: String?) in
+                view.sessionId = sessionId ?? "default"
+            }
+
             AsyncFunction("startRecording") { (view: SeamlessRecorderView, promise: Promise) in
                 view.startRecording(promise: promise)
             }.runOnQueue(.main)

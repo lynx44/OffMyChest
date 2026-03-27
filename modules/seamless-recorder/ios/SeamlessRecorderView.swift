@@ -32,6 +32,7 @@ class SeamlessRecorderView: ExpoView,
     private var facing: String = "front"
     private var videoWidth = defaultVideoWidth
     private var videoHeight = defaultVideoHeight
+    private var sessionId: String = "default"
 
     // MARK: - AVFoundation state
 
@@ -384,7 +385,7 @@ class SeamlessRecorderView: ExpoView,
     // MARK: - File Helpers
 
     private func createChunkFile(index: Int) -> URL {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("seamless_recorder")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("seamless_recorder/\(sessionId)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent(String(format: "chunk_%03d.mp4", index))
     }

@@ -353,6 +353,19 @@ class SeamlessPlayerView: ExpoView {
         return loadedChunkCount
     }
 
+    func seekToChunk(_ windowIndex: Int) {
+        guard let player = player, windowIndex < allItems.count else { return }
+        let target = allItems[windowIndex]
+        // Remove all items before the target and re-insert them after
+        // AVQueuePlayer doesn't support arbitrary seeks, so we rebuild from target
+        player.removeAllItems()
+        for i in windowIndex..<allItems.count {
+            player.insert(allItems[i], after: player.items().last)
+        }
+        player.play()
+        NSLog("[%@] seekToChunk: %d", SeamlessPlayerView.TAG, windowIndex)
+    }
+
     // MARK: - Observers
 
     private func observeItemEnd(_ item: AVPlayerItem) {

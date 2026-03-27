@@ -16,6 +16,7 @@ interface NativeProps {
   style?: StyleProp<ViewStyle>;
   facing?: 'front' | 'back';
   videoQuality?: '480p' | '720p' | '1080p';
+  sessionId?: string;
   onChunkReady?: (event: { nativeEvent: ChunkReadyEvent }) => void;
   onError?: (event: { nativeEvent: { message: string } }) => void;
 }
@@ -26,12 +27,14 @@ interface Props {
   style?: StyleProp<ViewStyle>;
   facing?: 'front' | 'back';
   videoQuality?: '480p' | '720p' | '1080p';
+  /** Unique ID for this recording session. Chunks are stored in a per-session directory. */
+  sessionId?: string;
   onChunkReady?: (event: ChunkReadyEvent) => void;
   onError?: (message: string) => void;
 }
 
 export const SeamlessRecorderView = forwardRef<SeamlessRecorderRef, Props>(
-  function SeamlessRecorderView({ style, facing = 'front', videoQuality = '480p', onChunkReady, onError }, ref) {
+  function SeamlessRecorderView({ style, facing = 'front', videoQuality = '480p', sessionId, onChunkReady, onError }, ref) {
     const nativeRef = useRef(null);
 
     useImperativeHandle(ref, () => ({
@@ -49,6 +52,7 @@ export const SeamlessRecorderView = forwardRef<SeamlessRecorderRef, Props>(
         style={style}
         facing={facing}
         videoQuality={videoQuality}
+        sessionId={sessionId}
         onChunkReady={onChunkReady ? (e) => onChunkReady(e.nativeEvent) : undefined}
         onError={onError ? (e) => onError(e.nativeEvent.message) : undefined}
       />

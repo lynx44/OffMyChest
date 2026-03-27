@@ -35,12 +35,15 @@ export default function RecordScreen() {
 
   const [permission, requestPermission] = useCameraPermissions();
   const [micPermission, requestMicPermission] = useMicrophonePermissions();
-  const [status, setStatus] = useState<RecordingStatus>('idle');
   const [isRecording, setIsRecording] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notesVisible, setNotesVisible] = useState(false);
   const [hasNotes, setHasNotes] = useState(false);
+  const [sessionId, setSessionId] = useState(() => Crypto.randomUUID());
+
+  /** Number of background upload/finalize tasks in progress */
+  const [bgUploads, setBgUploads] = useState(0);
 
   const recorderRef = useRef<SeamlessRecorderRef>(null);
   const messageIdRef = useRef<string>('');
@@ -92,7 +95,6 @@ export default function RecordScreen() {
   function handleRecorderError(message: string) {
     console.error('[Record] Recorder error:', message);
     setErrorMessage(message);
-    setStatus('error');
     setIsRecording(false);
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -106,7 +108,7 @@ export default function RecordScreen() {
       return;
     }
 
-    const messageId = Crypto.randomUUID();
+    const messageId = sessionId;
     messageIdRef.current = messageId;
     startTimeRef.current = Date.now();
 
@@ -125,7 +127,6 @@ export default function RecordScreen() {
       groupId: groupId ?? null,
     }, user.email);
 
-    setStatus('recording');
     setIsRecording(true);
     setElapsedSeconds(0);
     setErrorMessage(null);
@@ -141,15 +142,13 @@ export default function RecordScreen() {
     } catch (err) {
       console.error('startRecording failed:', err);
       setErrorMessage('Failed to start recording.');
-      setStatus('error');
       setIsRecording(false);
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     }
   }
 
   async function handleStopRecording() {
-    if (status !== 'recording') return;
-    setStatus('stopping');
+    if (!isRecording) return;
     setIsRecording(false);
 
     if (timerRef.current) {
@@ -163,35 +162,49 @@ export default function RecordScreen() {
       console.error('stopRecording failed:', err);
     }
 
-    await finalize();
-  }
+    // Wait for the final onChunkReady event to cross the native→JS bridge
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
-  async function finalize() {
+    // Capture references for background work
     const uploader = uploaderRef.current;
     const messageId = messageIdRef.current;
-    if (!uploader || !user) return;
+    const durationSeconds = Math.round((Date.now() - startTimeRef.current) / 1000);
+    const email = user?.email ?? '';
 
-    try {
-      setStatus('uploading');
-      await updateDraftStatus(messageId, 'uploading');
+    // Reset immediately — each recording has its own directory (via sessionId),
+    // so the next recording's files can never overwrite the previous one's.
+    uploaderRef.current = null;
+    messageIdRef.current = '';
+    setElapsedSeconds(0);
+    // Generate a new sessionId for the next recording
+    setSessionId(Crypto.randomUUID());
 
-      const uploadedChunks = await uploader.waitForAll();
-      const durationSeconds = Math.round((Date.now() - startTimeRef.current) / 1000);
-
-      setStatus('finalizing');
-      await uploader.finalize(uploadedChunks, durationSeconds, user.email);
-
-      setStatus('done');
-      router.back();
-    } catch (err) {
-      console.error('Finalize failed:', err);
-      const msg = err instanceof Error ? err.message : String(err);
-      setErrorMessage(`Upload failed: ${msg}`);
-      setStatus('error');
+    // Run entire upload + finalize in background
+    if (uploader && email) {
+      setBgUploads((n) => n + 1);
+      finalizeInBackground(uploader, messageId, durationSeconds, email);
     }
   }
 
-  if (status === 'error') {
+  async function finalizeInBackground(
+    uploader: ChunkUploader,
+    messageId: string,
+    durationSeconds: number,
+    email: string,
+  ) {
+    try {
+      await updateDraftStatus(messageId, 'uploading');
+      const uploadedChunks = await uploader.waitForAll();
+      await uploader.finalize(uploadedChunks, durationSeconds, email);
+      console.log(`[Record] Background finalize complete for ${messageId}`);
+    } catch (err) {
+      console.error(`[Record] Background finalize failed for ${messageId}:`, err);
+    } finally {
+      setBgUploads((n) => n - 1);
+    }
+  }
+
+  if (errorMessage && !isRecording) {
     return (
       <View style={styles.container}>
         <Text style={styles.errorText}>{errorMessage}</Text>
@@ -202,8 +215,6 @@ export default function RecordScreen() {
     );
   }
 
-  const isUploading = status === 'uploading' || status === 'finalizing';
-
   return (
     <View style={styles.container}>
       <SeamlessRecorderView
@@ -211,6 +222,7 @@ export default function RecordScreen() {
         style={StyleSheet.absoluteFillObject}
         facing="front"
         videoQuality="480p"
+        sessionId={sessionId}
         onChunkReady={handleChunkReady}
         onError={handleRecorderError}
       />
@@ -218,11 +230,10 @@ export default function RecordScreen() {
       <View style={styles.overlay}>
         {/* Top bar */}
         <View style={styles.topBar}>
-          <TouchableOpacity
-            onPress={status === 'idle' ? () => router.back() : undefined}
-            disabled={status !== 'idle'}
-          >
-            <Text style={styles.cancelText}>Cancel</Text>
+          <TouchableOpacity onPress={() => router.back()}>
+            <Text style={styles.cancelText}>
+              {isRecording ? 'Cancel' : 'Done'}
+            </Text>
           </TouchableOpacity>
 
           <View style={styles.topRight}>
@@ -246,29 +257,29 @@ export default function RecordScreen() {
           onToggle={() => setNotesVisible((v) => !v)}
         />
 
+        {/* Background upload indicator */}
+        {bgUploads > 0 && !isRecording && (
+          <View style={styles.bgUploadBanner}>
+            <ActivityIndicator color="#fff" size="small" />
+            <Text style={styles.bgUploadText}>
+              Sending{bgUploads > 1 ? ` (${bgUploads})` : ''}...
+            </Text>
+          </View>
+        )}
+
         {/* Bottom controls */}
         <View style={styles.bottomBar}>
-          {isUploading ? (
-            <View style={styles.uploadingContainer}>
-              <ActivityIndicator color="#fff" />
-              <Text style={styles.uploadingText}>
-                {status === 'finalizing' ? 'Finalizing...' : 'Uploading...'}
-              </Text>
-            </View>
-          ) : (
-            <TouchableOpacity
-              style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
-              onPress={isRecording ? handleStopRecording : handleStartRecording}
-              disabled={status === 'stopping'}
-            >
-              <View
-                style={[
-                  styles.recordBtnInner,
-                  isRecording && styles.recordBtnInnerActive,
-                ]}
-              />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
+            onPress={isRecording ? handleStopRecording : handleStartRecording}
+          >
+            <View
+              style={[
+                styles.recordBtnInner,
+                isRecording && styles.recordBtnInnerActive,
+              ]}
+            />
+          </TouchableOpacity>
         </View>
       </View>
     </View>
@@ -345,8 +356,17 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: '#FF3B30',
   },
-  uploadingContainer: { alignItems: 'center', gap: 8 },
-  uploadingText: { color: '#fff', fontSize: 14 },
+  bgUploadBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  bgUploadText: { color: '#fff', fontSize: 13 },
   permissionText: { color: '#fff', textAlign: 'center', padding: 32, fontSize: 16 },
   cancelLink: { color: '#aaa', fontSize: 16, marginTop: 16 },
   errorText: { color: '#fff', textAlign: 'center', padding: 32, fontSize: 16 },

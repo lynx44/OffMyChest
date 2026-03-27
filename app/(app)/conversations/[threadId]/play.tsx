@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   Pressable,
   StyleSheet,
@@ -62,6 +63,10 @@ export default function PlayScreen() {
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const loadedChunkCountRef = useRef(0);
   const elapsedOffsetRef = useRef(0);
+  const isLiveRef = useRef(false);
+  const liveManifestUrlRef = useRef('');
+  /** Tick counter for periodic position save (every 10 ticks × 500ms = 5s) */
+  const saveTickRef = useRef(0);
 
   /** Tracks which chunks belong to which video in the concatenated playlist */
   const videoBoundariesRef = useRef<VideoBoundary[]>([]);
@@ -146,6 +151,8 @@ export default function PlayScreen() {
         if (manifest.status === 'complete' || !manifest.status) {
           console.log('[Live] Recording complete, stopping poll');
           setIsLive(false);
+          isLiveRef.current = false;
+          liveManifestUrlRef.current = '';
           setTotalDuration(manifest.duration_seconds);
           if (pollTimerRef.current) {
             clearInterval(pollTimerRef.current);
@@ -231,6 +238,20 @@ export default function PlayScreen() {
           // Update manifestUrlRef so back-button save targets the right video
           manifestUrlRef.current = boundary.url;
 
+          // Save position every ~5 seconds so it survives unexpected interruptions
+          saveTickRef.current += 1;
+          if (saveTickRef.current % 10 === 0) {
+            const relWindowIdx = windowIdx - boundary.startIdx;
+            const chunkDurMs = boundary.count > 0 ? (boundary.duration * 1000) / boundary.count : 0;
+            const relativePositionMs = relWindowIdx * 1_000_000 + windowOffset;
+            const elapsedSec = Math.floor((relWindowIdx * chunkDurMs + windowOffset) / 1000);
+            saveWatchState(boundary.url, {
+              completed: false,
+              positionMs: relativePositionMs,
+              elapsedSeconds: elapsedSec,
+            }).catch(() => {});
+          }
+
           // Compute elapsed for current video only
           const relWindowIdx = windowIdx - boundary.startIdx;
           const chunkDurMs = boundary.count > 0 ? (boundary.duration * 1000) / boundary.count : 0;
@@ -247,6 +268,51 @@ export default function PlayScreen() {
       }
     };
   }, [loadState, paused, findBoundary]);
+
+  // When app returns to foreground, re-sync live video:
+  // - restart polling if it was throttled in background
+  // - immediately fetch manifest to append any missed chunks
+  // - if player reached STATE_ENDED while backgrounded, appendChunks will resume it
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', async (nextState) => {
+      if (nextState !== 'active') return;
+      if (!isLiveRef.current || !liveManifestUrlRef.current) return;
+      try {
+        const manifestUrl = liveManifestUrlRef.current;
+        console.log('[Live] App foregrounded — re-syncing live manifest');
+
+        // Restart poll timer if it stopped
+        if (!pollTimerRef.current) {
+          startLivePolling(manifestUrl);
+        }
+
+        // Immediately fetch and append any chunks missed while backgrounded
+        const manifest = await fetchPublicJson<MessageManifest>(manifestUrl);
+        const loaded = loadedChunkCountRef.current;
+        if (manifest.chunks.length > loaded) {
+          const toAppend = manifest.chunks.slice(loaded);
+          console.log(`[Live] Foreground catch-up: appending ${toAppend.length} missed chunks`);
+          await playerRef.current?.appendChunks(toAppend);
+          loadedChunkCountRef.current = manifest.chunks.length;
+
+          // Update boundary count so position tracking stays accurate
+          const b = videoBoundariesRef.current[0];
+          if (b) b.count = manifest.chunks.length;
+        }
+
+        if (manifest.status === 'complete' || !manifest.status) {
+          setIsLive(false);
+          isLiveRef.current = false;
+          liveManifestUrlRef.current = '';
+          setTotalDuration(manifest.duration_seconds);
+          stopLivePolling();
+        }
+      } catch (err) {
+        console.warn('[Live] Foreground re-sync failed:', err);
+      }
+    });
+    return () => sub.remove();
+  }, [startLivePolling, stopLivePolling]);
 
   // Handle Android hardware back button
   useEffect(() => {
@@ -351,6 +417,9 @@ export default function PlayScreen() {
         loadedChunkCountRef.current = allChunks.length;
         setLoadState('playing');
 
+        isLiveRef.current = live;
+        liveManifestUrlRef.current = live ? initialManifestUrl : '';
+
         if (live) {
           startLivePolling(initialManifestUrl);
         }
@@ -360,6 +429,28 @@ export default function PlayScreen() {
       }
     })();
   }, [initialManifestUrl, startLivePolling, stopLivePolling]);
+
+  /** On source error, try to skip the bad chunk. Shows error screen only if unrecoverable. */
+  const handlePlaybackError = useCallback(async (msg: string) => {
+    console.warn('[Play] Source error:', msg);
+    try {
+      const posMs = await playerRef.current?.getPositionMs();
+      if (posMs != null) {
+        const windowIdx = Math.floor(posMs / 1_000_000);
+        const totalChunks = loadedChunkCountRef.current;
+        const nextChunk = windowIdx + 1;
+        if (nextChunk < totalChunks) {
+          console.log(`[Play] Skipping bad chunk ${windowIdx} → seeking to ${nextChunk}`);
+          await playerRef.current?.seekToChunk(nextChunk);
+          return; // recovered — stay on playing state
+        }
+      }
+    } catch (skipErr) {
+      console.warn('[Play] Skip recovery failed:', skipErr);
+    }
+    setError(msg);
+    setLoadState('error');
+  }, []);
 
   const handlePlaybackFinished = useCallback(async () => {
     if (isLive) return;
@@ -400,10 +491,7 @@ export default function PlayScreen() {
             startPosition={startPosition}
             liveMode={isLive}
             onPlaybackFinished={handlePlaybackFinished}
-            onPlaybackError={(msg) => {
-              setError(msg);
-              setLoadState('error');
-            }}
+            onPlaybackError={handlePlaybackError}
             onLiveCaughtUp={() => {
               speedRef.current = 1;
               setSpeed(1);

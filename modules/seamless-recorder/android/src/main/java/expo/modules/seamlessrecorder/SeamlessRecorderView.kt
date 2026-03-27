@@ -52,6 +52,7 @@ class SeamlessRecorderView(context: Context, appContext: AppContext) :
   private var facing: String = "front"
   private var videoWidth = DEFAULT_VIDEO_WIDTH
   private var videoHeight = DEFAULT_VIDEO_HEIGHT
+  private var sessionId: String = "default"
 
   // --- Camera2 state ---
   private var cameraDevice: CameraDevice? = null
@@ -107,6 +108,10 @@ class SeamlessRecorderView(context: Context, appContext: AppContext) :
       "720p" -> { videoWidth = 1280; videoHeight = 720 }
       "1080p" -> { videoWidth = 1920; videoHeight = 1080 }
     }
+  }
+
+  fun setSessionId(value: String) {
+    sessionId = value
   }
 
   // ---------- Preview (camera open without recording) ----------
@@ -340,7 +345,7 @@ class SeamlessRecorderView(context: Context, appContext: AppContext) :
   }
 
   private fun createChunkFile(index: Int): File {
-    val dir = File(appContext.cacheDirectory, "seamless_recorder")
+    val dir = File(appContext.cacheDirectory, "seamless_recorder/$sessionId")
     if (!dir.exists()) dir.mkdirs()
     return File(dir, "chunk_${String.format("%03d", index)}.mp4")
   }

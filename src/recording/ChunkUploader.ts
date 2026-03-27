@@ -151,28 +151,44 @@ export class ChunkUploader {
   }
 
   /**
-   * Finalize: update manifest to 'complete', add thumbnail, update outbox duration.
-   * Call after waitForAll() resolves.
+   * Capture a thumbnail from the first chunk's local file.
+   * Must be called while the local file still exists (before a new recording starts).
+   * Returns the local thumbnail URI, or null on failure.
    */
-  async finalize(
+  async captureThumbnailNow(): Promise<string | null> {
+    if (!this.firstChunkUri) return null;
+    try {
+      return await captureThumbnail(this.firstChunkUri);
+    } catch (err) {
+      console.warn('Thumbnail capture failed:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Finalize with pre-uploaded chunks and pre-captured thumbnail.
+   * This method does NOT access local files, so it's safe to call after the
+   * native recorder has been restarted for a new recording.
+   */
+  async finalizeWithChunks(
     uploadedChunks: UploadedChunk[],
+    thumbnailUri: string | null,
     totalDurationSeconds: number,
     senderEmail: string,
   ): Promise<void> {
     await updateDraftStatus(this.session.messageId, 'finalizing');
 
-    // Upload thumbnail from first chunk
+    // Upload thumbnail if captured
     let thumbnailUrl = '';
-    if (this.firstChunkUri) {
+    if (thumbnailUri) {
       try {
-        const thumbUri = await captureThumbnail(this.firstChunkUri);
         thumbnailUrl = await this.adapter.uploadThumbnail(
           this.session.threadId,
           this.session.messageId,
-          thumbUri,
+          thumbnailUri,
         );
       } catch (err) {
-        console.warn('Thumbnail capture failed, continuing without it:', err);
+        console.warn('Thumbnail upload failed, continuing without it:', err);
       }
     }
 
@@ -194,10 +210,8 @@ export class ChunkUploader {
     };
 
     if (this.manifestFileId) {
-      // Update existing manifest to complete
       await this.adapter.updateManifest(this.manifestFileId, manifest);
     } else {
-      // Edge case: no chunks were uploaded before finalize
       const { url, fileId } = await this.adapter.uploadManifest(
         this.session.threadId,
         this.session.messageId,
@@ -207,7 +221,6 @@ export class ChunkUploader {
       this.manifestUrl = url;
     }
 
-    // Update outbox entry with final duration and status
     const entry: OutboxEntry = {
       message_id: this.session.messageId,
       thread_id: this.session.threadId,
@@ -221,5 +234,19 @@ export class ChunkUploader {
 
     await this.adapter.updateOutbox(entry);
     await clearDraft(this.session.messageId);
+  }
+
+  /**
+   * Finalize: update manifest to 'complete', add thumbnail, update outbox duration.
+   * Call after waitForAll() resolves.
+   * @deprecated Use captureThumbnailNow() + finalizeWithChunks() for background-safe finalization.
+   */
+  async finalize(
+    uploadedChunks: UploadedChunk[],
+    totalDurationSeconds: number,
+    senderEmail: string,
+  ): Promise<void> {
+    const thumbnailUri = await this.captureThumbnailNow();
+    return this.finalizeWithChunks(uploadedChunks, thumbnailUri, totalDurationSeconds, senderEmail);
   }
 }

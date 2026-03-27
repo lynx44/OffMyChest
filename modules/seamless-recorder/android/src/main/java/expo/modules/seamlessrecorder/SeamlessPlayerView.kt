@@ -59,6 +59,8 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   private var isLiveMode = false
   /** Suppress STATE_ENDED briefly after a seek to avoid false "finished" events */
   private var suppressEnded = false
+  /** When STATE_ENDED and new chunks are added, seek to this window once timeline updates */
+  private var pendingResumeChunk: Int = -1
 
   init {
     addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -142,6 +144,17 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
             Log.d(TAG, "Playback finished")
             onPlaybackFinished(mapOf<String, Any>())
           }
+        }
+      }
+
+      override fun onTimelineChanged(timeline: com.google.android.exoplayer2.Timeline, reason: Int) {
+        // After appending chunks while ended, seek once ExoPlayer has processed the new sources
+        val resumeAt = pendingResumeChunk
+        if (resumeAt >= 0 && timeline.windowCount > resumeAt) {
+          pendingResumeChunk = -1
+          Log.d(TAG, "Timeline updated — resuming from chunk $resumeAt")
+          exoPlayer.seekTo(resumeAt, 0)
+          exoPlayer.playWhenReady = true
         }
       }
 
@@ -258,24 +271,31 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     val concat = concatenatingSource ?: return
     val factory = cacheDataSourceFactory ?: return
     val wasEnded = p.playbackState == Player.STATE_ENDED
+    val previousCount = loadedChunkCount
 
-    var added = 0
     for (url in urls) {
       val mediaSource = ProgressiveMediaSource.Factory(factory)
         .createMediaSource(MediaItem.fromUri(Uri.parse(url)))
       concat.addMediaSource(mediaSource)
-      added++
+      loadedChunkCount++
     }
-    val previousCount = loadedChunkCount
-    loadedChunkCount += added
-    Log.d(TAG, "Appended $added chunks (total=$loadedChunkCount, wasEnded=$wasEnded)")
+    Log.d(TAG, "Appended ${loadedChunkCount - previousCount} chunks (total=$loadedChunkCount, wasEnded=$wasEnded)")
 
-    // If the player had reached the end, seek to the new content and resume
+    // If the player had reached the end, defer the seek until onTimelineChanged confirms
+    // the new sources are available — seeking immediately causes IllegalSeekPositionException
     if (wasEnded) {
-      p.seekTo(previousCount, 0)
-      p.playWhenReady = true
-      Log.d(TAG, "Resuming playback from chunk $previousCount")
+      pendingResumeChunk = previousCount
+      Log.d(TAG, "Queued resume at chunk $previousCount (waiting for timeline update)")
     }
+  }
+
+  /** Seek to the start of a specific chunk (window index) */
+  fun seekToChunk(windowIndex: Int) {
+    val p = player ?: return
+    suppressEnded = true
+    p.seekTo(windowIndex, 0)
+    p.playWhenReady = true
+    Log.d(TAG, "seekToChunk: window=$windowIndex")
   }
 
   fun setLiveMode(live: Boolean) {

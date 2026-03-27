@@ -21,6 +21,7 @@ export interface SeamlessPlayerRef {
   setSpeed: (speed: number) => Promise<void>;
   appendChunks: (urls: string[]) => Promise<void>;
   getLoadedChunkCount: () => Promise<number>;
+  seekToChunk: (windowIndex: number) => Promise<void>;
 }
 
 interface NativeProps {
@@ -73,6 +74,9 @@ export const SeamlessPlayerView = forwardRef<SeamlessPlayerRef, Props>(
       },
       async getLoadedChunkCount(): Promise<number> {
         return (await (nativeRef.current as any)?.getLoadedChunkCount()) ?? 0;
+      },
+      async seekToChunk(windowIndex: number) {
+        await (nativeRef.current as any)?.seekToChunk(windowIndex);
       },
     }));
 

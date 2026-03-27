@@ -57,6 +57,10 @@ public class SeamlessPlayerModule: Module {
             AsyncFunction("getLoadedChunkCount") { (view: SeamlessPlayerView) -> Int in
                 return view.getLoadedChunkCount()
             }.runOnQueue(.main)
+
+            AsyncFunction("seekToChunk") { (view: SeamlessPlayerView, windowIndex: Int) in
+                view.seekToChunk(windowIndex)
+            }.runOnQueue(.main)
         }
     }
 }

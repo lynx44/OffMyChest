@@ -20,6 +20,10 @@ class SeamlessRecorderModule : Module() {
         view.setQuality(quality)
       }
 
+      Prop("sessionId") { view: SeamlessRecorderView, sessionId: String ->
+        view.setSessionId(sessionId)
+      }
+
       AsyncFunction("startRecording") { view: SeamlessRecorderView, promise: Promise ->
         view.startRecording(promise)
       }.runOnQueue(Queues.MAIN)
