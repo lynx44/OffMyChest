@@ -491,6 +491,30 @@ export default function PlayScreen() {
     router.back();
   }, [savePartialProgress, router]);
 
+  const skipBy = useCallback(async (deltaSeconds: number) => {
+    try {
+      const elapsedMs = await playerRef.current?.getElapsedMs() ?? 0;
+      const targetMs = Math.max(0, elapsedMs + deltaSeconds * 1000);
+
+      // Walk boundaries to find which video + chunk the target falls in
+      const boundaries = videoBoundariesRef.current;
+      let accMs = 0;
+      for (const boundary of boundaries) {
+        const boundaryMs = boundary.duration * 1000;
+        if (targetMs <= accMs + boundaryMs || boundary === boundaries[boundaries.length - 1]) {
+          const relMs = Math.max(0, targetMs - accMs);
+          const chunkDurMs = boundary.count > 0 ? boundaryMs / boundary.count : 0;
+          const chunkWithin = chunkDurMs > 0 ? Math.min(Math.floor(relMs / chunkDurMs), boundary.count - 1) : 0;
+          const globalWindowIdx = boundary.startIdx + chunkWithin;
+          await playerRef.current?.seekToChunk(globalWindowIdx);
+          if (pausedRef.current) playerRef.current?.pause();
+          return;
+        }
+        accMs += boundaryMs;
+      }
+    } catch {}
+  }, []);
+
   const scrubPanResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -600,6 +624,10 @@ export default function PlayScreen() {
           />
           {!isLive && totalDuration > 0 && (
             <View style={styles.scrubberContainer}>
+              <TouchableOpacity style={styles.skipBtn} onPress={() => skipBy(-10)}>
+                <Text style={styles.skipIcon}>↺</Text>
+                <Text style={styles.skipLabel}>10</Text>
+              </TouchableOpacity>
               <View
                 ref={scrubTrackRef}
                 style={styles.scrubberTrack}
@@ -616,6 +644,10 @@ export default function PlayScreen() {
                   ]}
                 />
               </View>
+              <TouchableOpacity style={styles.skipBtn} onPress={() => skipBy(30)}>
+                <Text style={styles.skipIcon}>↻</Text>
+                <Text style={styles.skipLabel}>30</Text>
+              </TouchableOpacity>
             </View>
           )}
         </>
@@ -684,11 +716,30 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
     paddingBottom: 36,
-    paddingTop: 20,
+    paddingTop: 12,
     backgroundColor: 'rgba(0,0,0,0.4)',
     zIndex: 10,
+  },
+  skipBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 48,
+    paddingVertical: 4,
+  },
+  skipIcon: {
+    color: '#fff',
+    fontSize: 22,
+    lineHeight: 24,
+  },
+  skipLabel: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: -2,
   },
   scrubberTrack: {
     height: 56, // large touch target; thumb top = (56 - thumbSize) / 2
