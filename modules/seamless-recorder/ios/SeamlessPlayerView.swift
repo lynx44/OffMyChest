@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import AVFoundation
+import MediaPlayer
 import UIKit
 
 // MARK: - Chunk Cache
@@ -116,8 +117,74 @@ class SeamlessPlayerView: ExpoView {
 
     // MARK: - Public API
 
+    private func configureAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+        } catch {
+            NSLog("[%@] Audio session setup failed: %@", SeamlessPlayerView.TAG, error.localizedDescription)
+        }
+    }
+
+    private func setupRemoteCommandCenter() {
+        let center = MPRemoteCommandCenter.shared()
+
+        center.playCommand.removeTarget(nil)
+        center.playCommand.addTarget { [weak self] _ in
+            self?.player?.play()
+            return .success
+        }
+
+        center.pauseCommand.removeTarget(nil)
+        center.pauseCommand.addTarget { [weak self] _ in
+            self?.player?.pause()
+            return .success
+        }
+
+        center.togglePlayPauseCommand.removeTarget(nil)
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let player = self?.player else { return .commandFailed }
+            if player.rate > 0 {
+                player.pause()
+            } else {
+                player.play()
+            }
+            return .success
+        }
+
+        // Disable unsupported commands
+        center.nextTrackCommand.isEnabled = false
+        center.previousTrackCommand.isEnabled = false
+    }
+
+    private func updateNowPlayingInfo() {
+        var info = [String: Any]()
+        info[MPMediaItemPropertyTitle] = "Off My Chest"
+        info[MPMediaItemPropertyArtist] = "Video Message"
+        if let player = player, let currentItem = player.currentItem {
+            let elapsed = CMTimeGetSeconds(player.currentTime())
+            let duration = CMTimeGetSeconds(currentItem.duration)
+            if elapsed.isFinite { info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed }
+            if duration.isFinite && duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
+            info[MPNowPlayingInfoPropertyPlaybackRate] = player.rate
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func clearNowPlayingInfo() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.removeTarget(nil)
+        center.pauseCommand.removeTarget(nil)
+        center.togglePlayPauseCommand.removeTarget(nil)
+    }
+
     func loadChunks(_ urls: [String]) {
         releasePlayer()
+
+        // Configure audio session for background playback
+        configureAudioSession()
 
         // Start prefetching all chunks to local disk
         let remoteURLs = urls.compactMap { URL(string: $0) }
@@ -160,6 +227,10 @@ class SeamlessPlayerView: ExpoView {
         // Observe errors
         observePlayerErrors(queuePlayer)
 
+        // Set up lock screen / control center controls
+        setupRemoteCommandCenter()
+        updateNowPlayingInfo()
+
         queuePlayer.play()
         NSLog("[%@] Playing %d chunks", SeamlessPlayerView.TAG, urls.count)
     }
@@ -171,10 +242,12 @@ class SeamlessPlayerView: ExpoView {
 
     func play() {
         player?.play()
+        updateNowPlayingInfo()
     }
 
     func pause() {
         player?.pause()
+        updateNowPlayingInfo()
     }
 
     func setSpeed(_ speed: Float) {
@@ -376,6 +449,7 @@ class SeamlessPlayerView: ExpoView {
         statusObservation?.invalidate()
         statusObservation = nil
         removeEndObservers()
+        clearNowPlayingInfo()
         chunkCache.cancelAll()
         player?.pause()
         player?.removeAllItems()

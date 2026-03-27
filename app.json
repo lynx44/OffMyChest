@@ -18,7 +18,8 @@
       "bundleIdentifier": "com.pnwtechexperts.offmychest",
       "infoPlist": {
         "NSCameraUsageDescription": "Off My Chest needs camera access to record video messages.",
-        "NSMicrophoneUsageDescription": "Off My Chest needs microphone access to record video messages."
+        "NSMicrophoneUsageDescription": "Off My Chest needs microphone access to record video messages.",
+        "UIBackgroundModes": ["audio"]
       }
     },
     "android": {

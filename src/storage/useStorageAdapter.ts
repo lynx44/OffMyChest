@@ -9,7 +9,7 @@ import { GoogleDriveAdapter } from './GoogleDriveAdapter';
  * Returns null when the user is not signed in.
  */
 export function useStorageAdapter(): GoogleDriveAdapter | null {
-  const { user } = useAuth();
+  const { user, getValidToken } = useAuth();
   const adapterRef = useRef<GoogleDriveAdapter | null>(null);
 
   // Create the adapter once when user first signs in
@@ -19,6 +19,7 @@ export function useStorageAdapter(): GoogleDriveAdapter | null {
       userEmail: user.email,
       userName: user.name,
       accessToken: user.accessToken,
+      getValidToken,
     });
   }
 

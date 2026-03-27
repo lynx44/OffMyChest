@@ -17,4 +17,6 @@ android {
 dependencies {
   // ExoPlayer — same version as expo-av to avoid classpath conflicts
   implementation 'com.google.android.exoplayer:exoplayer:2.18.1'
+  implementation 'com.google.android.exoplayer:extension-mediasession:2.18.1'
+  implementation 'androidx.media:media:1.7.0'
 }

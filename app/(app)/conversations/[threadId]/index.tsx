@@ -2,6 +2,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   StyleSheet,
@@ -14,7 +15,7 @@ import { useAuth } from '../../../../src/auth/GoogleAuthProvider';
 import { getContacts } from '../../../../src/contacts/contactStore';
 import { useConversationMessages, ConversationMessage } from '../../../../src/messages/useConversationMessages';
 import { setPlaylist } from '../../../../src/messages/playlistStore';
-import { getWatchStates } from '../../../../src/messages/watchStateStore';
+import { getWatchStates, saveWatchState } from '../../../../src/messages/watchStateStore';
 import { Contact } from '../../../../src/shared/types';
 
 /** Reverse base64url → original URL */
@@ -135,6 +136,23 @@ export default function ConversationScreen() {
     })();
   }, [loading, messages]);
 
+  function handleLongPress(msg: ConversationMessage) {
+    Alert.alert(
+      'Video Options',
+      undefined,
+      [
+        {
+          text: 'Mark as Unwatched',
+          onPress: async () => {
+            await saveWatchState(msg.manifest_url, { completed: false, positionMs: 0 });
+            refreshWatchStates();
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  }
+
   function handlePlay(msg: ConversationMessage) {
     setPlaylist(messages.map((m) => m.manifest_url));
     const encoded = encodeParam(msg.manifest_url);
@@ -172,6 +190,7 @@ export default function ConversationScreen() {
             <TouchableOpacity
               style={[styles.bubble, item.fromMe ? styles.bubbleMe : styles.bubbleThem]}
               onPress={() => handlePlay(item)}
+              onLongPress={() => handleLongPress(item)}
               activeOpacity={0.8}
             >
               {/* Thumbnail */}

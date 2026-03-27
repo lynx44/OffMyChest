@@ -1,6 +1,16 @@
 import React, { forwardRef, useImperativeHandle, useRef } from 'react';
-import { requireNativeView } from 'expo';
+import { requireNativeModule, requireNativeView } from 'expo';
 import { StyleProp, ViewStyle } from 'react-native';
+
+const PlayerModule = requireNativeModule('ExpoSeamlessPlayer');
+
+export async function startBackgroundPlayback(): Promise<void> {
+  await PlayerModule.startBackgroundPlayback();
+}
+
+export async function stopBackgroundPlayback(): Promise<void> {
+  await PlayerModule.stopBackgroundPlayback();
+}
 
 export interface SeamlessPlayerRef {
   play: () => Promise<void>;

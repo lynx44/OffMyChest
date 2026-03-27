@@ -4,6 +4,11 @@ public class SeamlessPlayerModule: Module {
     public func definition() -> ModuleDefinition {
         Name("ExpoSeamlessPlayer")
 
+        // Background playback - on iOS, audio session is configured in the view.
+        // These are no-ops to match the Android API surface.
+        AsyncFunction("startBackgroundPlayback") { }
+        AsyncFunction("stopBackgroundPlayback") { }
+
         View(SeamlessPlayerView.self) {
             Events("onPlaybackFinished", "onPlaybackError", "onLiveCaughtUp")
 

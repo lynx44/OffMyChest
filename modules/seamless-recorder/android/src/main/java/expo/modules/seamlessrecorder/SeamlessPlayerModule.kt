@@ -8,6 +8,18 @@ class SeamlessPlayerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("ExpoSeamlessPlayer")
 
+    AsyncFunction("startBackgroundPlayback") {
+      val context = appContext.reactContext ?: return@AsyncFunction null
+      PlaybackService.start(context)
+      null
+    }
+
+    AsyncFunction("stopBackgroundPlayback") {
+      val context = appContext.reactContext ?: return@AsyncFunction null
+      PlaybackService.stop(context)
+      null
+    }
+
     View(SeamlessPlayerView::class) {
       Events("onPlaybackFinished", "onPlaybackError", "onLiveCaughtUp")
 

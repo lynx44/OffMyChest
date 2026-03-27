@@ -22,6 +22,7 @@ export class GoogleDriveAdapter implements StorageAdapter {
   private readonly userEmail: string;
   private readonly userName: string;
   private accessToken: string;
+  private readonly getValidToken: (() => Promise<string>) | null;
 
   /** Cached Drive file ID for outbox.json */
   private outboxFileId: string | null = null;
@@ -33,16 +34,32 @@ export class GoogleDriveAdapter implements StorageAdapter {
     userEmail: string;
     userName: string;
     accessToken: string;
+    getValidToken?: () => Promise<string>;
   }) {
     this.userSub = opts.userSub;
     this.userEmail = opts.userEmail;
     this.userName = opts.userName;
     this.accessToken = opts.accessToken;
+    this.getValidToken = opts.getValidToken ?? null;
   }
 
   /** Call after token refresh to keep the adapter current. */
   updateAccessToken(token: string): void {
     this.accessToken = token;
+  }
+
+  /** Get a fresh token, refreshing if needed. */
+  private async freshToken(): Promise<string> {
+    if (this.getValidToken) {
+      try {
+        const token = await this.getValidToken();
+        this.accessToken = token;
+        return token;
+      } catch {
+        // Fall back to current token
+      }
+    }
+    return this.accessToken;
   }
 
   // ---------------------------------------------------------------------------
@@ -69,7 +86,7 @@ export class GoogleDriveAdapter implements StorageAdapter {
     }
 
     // Search Drive (handles reinstall)
-    const folder = await getOrCreateAppFolder(DRIVE_FOLDER_NAME, this.accessToken);
+    const folder = await getOrCreateAppFolder(DRIVE_FOLDER_NAME, await this.freshToken());
     this.folderId = folder.id;
     await AsyncStorage.setItem(STORAGE_KEYS.driveFolderId(this.userSub), folder.id);
     return folder;
@@ -96,8 +113,9 @@ export class GoogleDriveAdapter implements StorageAdapter {
       messages: [],
     };
 
-    const file = await uploadJsonFile(OUTBOX_FILENAME, emptyOutbox, folderId, this.accessToken);
-    const publicUrl = await shareFilePublic(file.id, this.accessToken);
+    const token = await this.freshToken();
+    const file = await uploadJsonFile(OUTBOX_FILENAME, emptyOutbox, folderId, token);
+    const publicUrl = await shareFilePublic(file.id, token);
 
     this.outboxFileId = file.id;
     await Promise.all([
@@ -125,14 +143,15 @@ export class GoogleDriveAdapter implements StorageAdapter {
     );
     const filename = `chunk_${String(chunkIndex).padStart(3, '0')}.mp4`;
 
+    const token = await this.freshToken();
     const sessionUri = await initiateResumableUpload(
       filename,
       'video/mp4',
       chunkFolderId,
-      this.accessToken,
+      token,
     );
     const file = await uploadFileViaSession(sessionUri, fileUri, 'video/mp4');
-    return shareFilePublic(file.id, this.accessToken);
+    return shareFilePublic(file.id, token);
   }
 
   async uploadManifest(
@@ -143,13 +162,14 @@ export class GoogleDriveAdapter implements StorageAdapter {
     const folderId = await this.ensureFolderId();
     const msgFolderId = await this.ensureSubfolder(`threads/${threadId}/${messageId}`, folderId);
 
-    const file = await uploadJsonFile('manifest.json', manifest, msgFolderId, this.accessToken);
-    const url = await shareFilePublic(file.id, this.accessToken);
+    const token = await this.freshToken();
+    const file = await uploadJsonFile('manifest.json', manifest, msgFolderId, token);
+    const url = await shareFilePublic(file.id, token);
     return { url, fileId: file.id };
   }
 
   async updateManifest(fileId: string, manifest: MessageManifest): Promise<void> {
-    await updateJsonFile(fileId, manifest, this.accessToken);
+    await updateJsonFile(fileId, manifest, await this.freshToken());
   }
 
   async uploadThumbnail(
@@ -160,14 +180,15 @@ export class GoogleDriveAdapter implements StorageAdapter {
     const folderId = await this.ensureFolderId();
     const msgFolderId = await this.ensureSubfolder(`threads/${threadId}/${messageId}`, folderId);
 
+    const token = await this.freshToken();
     const sessionUri = await initiateResumableUpload(
       'thumb.jpg',
       'image/jpeg',
       msgFolderId,
-      this.accessToken,
+      token,
     );
     const file = await uploadFileViaSession(sessionUri, imageUri, 'image/jpeg');
-    return shareFilePublic(file.id, this.accessToken);
+    return shareFilePublic(file.id, token);
   }
 
   async getManifest(url: string): Promise<MessageManifest> {
@@ -204,7 +225,7 @@ export class GoogleDriveAdapter implements StorageAdapter {
       }
       current.updated_at = new Date().toISOString();
 
-      await updateJsonFile(this.outboxFileId, current, this.accessToken);
+      await updateJsonFile(this.outboxFileId, current, await this.freshToken());
     });
   }
 
@@ -244,7 +265,7 @@ export class GoogleDriveAdapter implements StorageAdapter {
     let currentParentId = rootFolderId;
 
     for (const segment of segments) {
-      const folder = await getOrCreateSubfolder(segment, currentParentId, this.accessToken);
+      const folder = await getOrCreateSubfolder(segment, currentParentId, await this.freshToken());
       currentParentId = folder.id;
     }
 

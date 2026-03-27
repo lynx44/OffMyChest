@@ -85,6 +85,14 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
       .build()
     exoPlayer.setVideoTextureView(textureView)
 
+    // Set audio attributes for background playback support
+    val audioAttrs = com.google.android.exoplayer2.audio.AudioAttributes.Builder()
+      .setContentType(com.google.android.exoplayer2.C.AUDIO_CONTENT_TYPE_MOVIE)
+      .setUsage(com.google.android.exoplayer2.C.USAGE_MEDIA)
+      .build()
+    exoPlayer.setAudioAttributes(audioAttrs, true)
+    exoPlayer.setWakeMode(com.google.android.exoplayer2.C.WAKE_MODE_LOCAL)
+
     val httpFactory = DefaultHttpDataSource.Factory()
       .setConnectTimeoutMs(15_000)
       .setReadTimeoutMs(15_000)
@@ -153,6 +161,10 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     exoPlayer.prepare()
     exoPlayer.playWhenReady = true
     player = exoPlayer
+
+    // Register with PlaybackService for background audio + notification
+    PlaybackService.currentPlayer = exoPlayer
+    PlaybackService.onPlayerChanged()
 
     Log.d(TAG, "Playing ${urls.size} chunks via ConcatenatingMediaSource")
   }
@@ -274,6 +286,8 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   fun getLoadedChunkCount(): Int = loadedChunkCount
 
   private fun releasePlayer() {
+    PlaybackService.currentPlayer = null
+    PlaybackService.onPlayerChanged()
     player?.release()
     player = null
     concatenatingSource = null
