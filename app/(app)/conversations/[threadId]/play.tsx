@@ -612,7 +612,7 @@ export default function PlayScreen() {
                 <View
                   style={[
                     styles.scrubberThumb,
-                    { transform: [{ translateX: scrubFraction * scrubBarWidthRef.current - 10 }] },
+                    { transform: [{ translateX: scrubFraction * scrubBarWidthRef.current - 7 }] },
                   ]}
                 />
               </View>
@@ -691,7 +691,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   scrubberTrack: {
-    height: 56,
+    height: 56, // large touch target; thumb top = (56 - thumbSize) / 2
     justifyContent: 'center',
   },
   scrubberTrackInner: {
@@ -709,11 +709,11 @@ const styles = StyleSheet.create({
   },
   scrubberThumb: {
     position: 'absolute',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
     backgroundColor: '#fff',
-    top: -8,
+    top: 21, // (56 - 14) / 2 — centers the dot on the 4px bar
     left: 0,
   },
 });
