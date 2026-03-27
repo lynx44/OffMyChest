@@ -599,11 +599,13 @@ export default function PlayScreen() {
                 onLayout={(e) => { scrubBarWidthRef.current = e.nativeEvent.layout.width; }}
                 {...scrubPanResponder.panHandlers}
               >
-                <View style={[styles.scrubberFill, { width: `${scrubFraction * 100}%` }]} />
+                <View style={styles.scrubberTrackInner}>
+                  <View style={[styles.scrubberFill, { width: `${scrubFraction * 100}%` }]} />
+                </View>
                 <View
                   style={[
                     styles.scrubberThumb,
-                    { transform: [{ translateX: scrubFraction * scrubBarWidthRef.current - 8 }] },
+                    { transform: [{ translateX: scrubFraction * scrubBarWidthRef.current - 10 }] },
                   ]}
                 />
               </View>
@@ -682,10 +684,13 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   scrubberTrack: {
+    height: 36,
+    justifyContent: 'center',
+  },
+  scrubberTrackInner: {
     height: 4,
     backgroundColor: 'rgba(255,255,255,0.3)',
     borderRadius: 2,
-    justifyContent: 'center',
   },
   scrubberFill: {
     position: 'absolute',
@@ -697,11 +702,11 @@ const styles = StyleSheet.create({
   },
   scrubberThumb: {
     position: 'absolute',
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     backgroundColor: '#fff',
-    top: -6,
+    top: -8,
     left: 0,
   },
 });
