@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { getNotes, saveNotes } from './notesStore';
+import { getNotes, saveNotes, pushClearHistory, popClearHistory, getClearHistoryCount } from './notesStore';
 
 interface Props {
   threadId: string;
@@ -22,12 +22,14 @@ export function NotesOverlay({ threadId, visible, onToggle }: Props) {
   const [text, setText] = useState('');
   const [editing, setEditing] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [undoCount, setUndoCount] = useState(0);
   const inputRef = useRef<TextInput>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    getNotes(threadId).then((notes) => {
+    Promise.all([getNotes(threadId), getClearHistoryCount(threadId)]).then(([notes, count]) => {
       setText(notes);
+      setUndoCount(count);
       setLoaded(true);
     });
   }, [threadId]);
@@ -65,10 +67,20 @@ export function NotesOverlay({ threadId, visible, onToggle }: Props) {
     saveNotes(threadId, text);
   }, [threadId, text]);
 
-  const handleClear = useCallback(() => {
+  const handleClear = useCallback(async () => {
+    await pushClearHistory(threadId, text);
+    setUndoCount((n) => Math.min(n + 1, 3));
     setText('');
     saveNotes(threadId, '');
     setEditing(false);
+  }, [threadId, text]);
+
+  const handleUndo = useCallback(async () => {
+    const restored = await popClearHistory(threadId);
+    if (restored === null) return;
+    setText(restored);
+    await saveNotes(threadId, restored);
+    setUndoCount((n) => Math.max(n - 1, 0));
   }, [threadId]);
 
   if (!visible || !loaded) return null;
@@ -85,6 +97,11 @@ export function NotesOverlay({ threadId, visible, onToggle }: Props) {
             <View style={styles.editHeader}>
               <Text style={styles.title}>Notes</Text>
               <View style={styles.editActions}>
+                {undoCount > 0 && (
+                  <TouchableOpacity onPress={handleUndo} style={styles.undoBtn}>
+                    <Text style={styles.undoText}>Undo{undoCount > 1 ? ` (${undoCount})` : ''}</Text>
+                  </TouchableOpacity>
+                )}
                 {text.length > 0 && (
                   <TouchableOpacity onPress={handleClear} style={styles.clearBtn}>
                     <Text style={styles.clearText}>Clear</Text>
@@ -109,19 +126,22 @@ export function NotesOverlay({ threadId, visible, onToggle }: Props) {
             />
           </View>
         ) : (
-          <TouchableOpacity
-            style={styles.displayContainer}
-            onPress={handleEdit}
-            activeOpacity={0.8}
-          >
-            {text.trim() ? (
-              <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-                <Text style={styles.noteText}>{text}</Text>
-              </ScrollView>
-            ) : (
-              <Text style={styles.placeholderText}>Tap to add notes...</Text>
+          <View style={styles.displayContainer}>
+            <TouchableOpacity onPress={handleEdit} activeOpacity={0.8} style={styles.displayTouchable}>
+              {text.trim() ? (
+                <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+                  <Text style={styles.noteText}>{text}</Text>
+                </ScrollView>
+              ) : (
+                <Text style={styles.placeholderText}>Tap to add notes...</Text>
+              )}
+            </TouchableOpacity>
+            {undoCount > 0 && (
+              <TouchableOpacity onPress={handleUndo} style={styles.undoBtnDisplay}>
+                <Text style={styles.undoText}>↩ Undo clear{undoCount > 1 ? ` (${undoCount})` : ''}</Text>
+              </TouchableOpacity>
             )}
-          </TouchableOpacity>
+          </View>
         )}
       </View>
     </KeyboardAvoidingView>
@@ -165,8 +185,11 @@ const styles = StyleSheet.create({
   displayContainer: {
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderRadius: 12,
-    padding: 16,
+    overflow: 'hidden',
     maxHeight: '60%',
+  },
+  displayTouchable: {
+    padding: 16,
   },
   scrollView: {
     maxHeight: 200,
@@ -203,6 +226,21 @@ const styles = StyleSheet.create({
   editActions: {
     flexDirection: 'row',
     gap: 12,
+  },
+  undoBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  undoBtnDisplay: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.15)',
+  },
+  undoText: {
+    color: '#FFD60A',
+    fontSize: 14,
+    fontWeight: '600',
   },
   clearBtn: {
     paddingHorizontal: 8,

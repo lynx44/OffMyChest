@@ -20,6 +20,7 @@ export const STORAGE_KEYS = {
   driveOutboxPublicUrl: (sub: string) => `drive:outboxPublicUrl:${sub}`,
   contacts: (sub: string) => `contacts:${sub}`,
   notes: (threadId: string) => `notes:${threadId}`,
+  notesUndo: (threadId: string) => `notes_undo:${threadId}`,
   draft: (messageId: string) => `draft:${messageId}`,
   cachedOutboxUpdatedAt: (outboxUrl: string) => `poll:updatedAt:${outboxUrl}`,
 } as const;
