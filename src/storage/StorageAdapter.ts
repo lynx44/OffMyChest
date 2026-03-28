@@ -42,4 +42,11 @@ export interface StorageAdapter {
 
   /** Read the current outbox.json (own user's). */
   readOwnOutbox(): Promise<Outbox>;
+
+  /**
+   * Delete a message the user owns:
+   * - Removes the message folder (and all chunks/thumbnail/manifest) from Drive
+   * - Removes the entry from outbox.json
+   */
+  deleteMessage(manifestUrl: string, messageId: string): Promise<void>;
 }

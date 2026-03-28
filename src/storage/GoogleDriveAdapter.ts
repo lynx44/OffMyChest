@@ -6,7 +6,9 @@ import { MessageManifest, Outbox, OutboxEntry } from '../shared/types';
 import { DriveApiError } from '../shared/errors';
 import {
   DriveFile,
+  deleteFile,
   fetchPublicJson,
+  getFileParents,
   getOrCreateAppFolder,
   getOrCreateSubfolder,
   initiateResumableUpload,
@@ -235,6 +237,40 @@ export class GoogleDriveAdapter implements StorageAdapter {
     );
     if (!outboxUrl) throw new Error('Outbox not initialized');
     return fetchPublicJson<Outbox>(outboxUrl);
+  }
+
+  async deleteMessage(manifestUrl: string, messageId: string): Promise<void> {
+    const token = await this.freshToken();
+
+    // Extract the manifest file ID from the public download URL
+    const match = manifestUrl.match(/[?&]id=([^&]+)/);
+    if (!match) throw new Error('Could not extract file ID from manifest URL');
+    const manifestFileId = match[1];
+
+    // Get the message folder (parent of manifest.json) and delete it —
+    // trashing the folder removes all chunks, thumbnail, and manifest at once
+    const parents = await getFileParents(manifestFileId, token);
+    if (parents.length > 0) {
+      await deleteFile(parents[0], token);
+    } else {
+      // Fallback: delete just the manifest file if we can't find the folder
+      await deleteFile(manifestFileId, token);
+    }
+
+    // Remove from outbox.json
+    await enqueueOutboxWrite(async () => {
+      const [outboxUrl, cachedFileId] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEYS.driveOutboxPublicUrl(this.userSub)),
+        AsyncStorage.getItem(STORAGE_KEYS.driveOutboxFileId(this.userSub)),
+      ]);
+      if (cachedFileId) this.outboxFileId = cachedFileId;
+      if (!outboxUrl || !this.outboxFileId) return;
+
+      const current = await fetchPublicJson<Outbox>(outboxUrl);
+      current.messages = current.messages.filter((m) => m.message_id !== messageId);
+      current.updated_at = new Date().toISOString();
+      await updateJsonFile(this.outboxFileId, current, await this.freshToken());
+    });
   }
 
   // ---------------------------------------------------------------------------

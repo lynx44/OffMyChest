@@ -16,6 +16,7 @@ import { getContacts } from '../../../../src/contacts/contactStore';
 import { useConversationMessages, ConversationMessage } from '../../../../src/messages/useConversationMessages';
 import { setPlaylist } from '../../../../src/messages/playlistStore';
 import { getWatchStates, saveWatchState } from '../../../../src/messages/watchStateStore';
+import { useStorageAdapter } from '../../../../src/storage/useStorageAdapter';
 import { Contact } from '../../../../src/shared/types';
 
 /** Reverse base64url → original URL */
@@ -50,6 +51,7 @@ export default function ConversationScreen() {
   const { user } = useAuth();
   const router = useRouter();
 
+  const adapter = useStorageAdapter();
   const contactOutboxUrl = decodeThreadId(threadId);
   const { messages, loading, error, refresh } = useConversationMessages(
     user?.sub ?? '',
@@ -137,20 +139,47 @@ export default function ConversationScreen() {
   }, [loading, messages]);
 
   function handleLongPress(msg: ConversationMessage) {
-    Alert.alert(
-      'Video Options',
-      undefined,
-      [
-        {
-          text: 'Mark as Unwatched',
-          onPress: async () => {
-            await saveWatchState(msg.manifest_url, { completed: false, positionMs: 0 });
-            refreshWatchStates();
-          },
+    const buttons: React.ComponentProps<typeof Alert>['buttons'] = [];
+
+    if (msg.fromMe) {
+      buttons.push({
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          Alert.alert(
+            'Delete Video',
+            'This will permanently delete the video from your Drive. This cannot be undone.',
+            [
+              {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: async () => {
+                  try {
+                    await adapter?.deleteMessage(msg.manifest_url, msg.message_id);
+                    refresh();
+                  } catch (e) {
+                    Alert.alert('Error', 'Failed to delete video. Please try again.');
+                  }
+                },
+              },
+              { text: 'Cancel', style: 'cancel' },
+            ],
+          );
         },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    );
+      });
+    }
+
+    buttons.push({
+      text: 'Mark as Unwatched',
+      onPress: async () => {
+        await saveWatchState(msg.manifest_url, { completed: false, positionMs: 0 });
+        refreshWatchStates();
+      },
+    });
+
+    buttons.push({ text: 'Cancel', style: 'cancel' });
+
+    Alert.alert('Video Options', undefined, buttons);
   }
 
   function handlePlay(msg: ConversationMessage) {

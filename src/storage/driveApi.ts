@@ -302,6 +302,29 @@ export async function executeResumableUpload(
 }
 
 // ---------------------------------------------------------------------------
+// File deletion
+// ---------------------------------------------------------------------------
+
+/** Move a file/folder to trash. Trashing a folder trashes all its contents. */
+export async function deleteFile(fileId: string, accessToken: string): Promise<void> {
+  await driveRequest<void>(
+    `${DRIVE_API_BASE}/files/${fileId}`,
+    { method: 'DELETE' },
+    accessToken,
+  );
+}
+
+/** Return the parent folder IDs of a file. */
+export async function getFileParents(fileId: string, accessToken: string): Promise<string[]> {
+  const data = await driveRequest<{ parents?: string[] }>(
+    `${DRIVE_API_BASE}/files/${fileId}?fields=parents`,
+    { method: 'GET' },
+    accessToken,
+  );
+  return data.parents ?? [];
+}
+
+// ---------------------------------------------------------------------------
 // Public file fetch (no auth — anyoneWithLink)
 // ---------------------------------------------------------------------------
 
