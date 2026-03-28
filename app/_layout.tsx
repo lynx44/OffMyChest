@@ -1,11 +1,9 @@
 import { Slot, useRouter, useSegments } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import React, { useEffect, useRef } from 'react';
 
 import { GoogleAuthProvider, useAuth } from '../src/auth/GoogleAuthProvider';
 import { initializeOutbox } from '../src/outbox/outboxService';
 import { getIncompleteDrafts, clearDraft } from '../src/recording/draftStore';
-import { DraftMessage } from '../src/shared/types';
 
 function AuthGate() {
   const { user, isLoading } = useAuth();
@@ -41,35 +39,12 @@ function AuthGate() {
     try {
       const drafts = await getIncompleteDrafts();
       if (drafts.length === 0) return;
-
-      // Show one prompt for all orphaned drafts (rare to have more than one)
-      const count = drafts.length;
-      const label = count === 1
-        ? `You have an unsent video message`
-        : `You have ${count} unsent video messages`;
-
-      Alert.alert(
-        label,
-        'Would you like to discard it?',
-        [
-          {
-            text: 'Keep for now',
-            style: 'cancel',
-          },
-          {
-            text: 'Discard',
-            style: 'destructive',
-            onPress: () => discardDrafts(drafts),
-          },
-        ],
-      );
+      // Local chunk files no longer exist after an app restart, so resumption
+      // isn't possible. Silently clear any stale drafts.
+      await Promise.all(drafts.map((d) => clearDraft(d.message_id)));
     } catch (err) {
       console.error('Draft check failed:', err);
     }
-  }
-
-  async function discardDrafts(drafts: DraftMessage[]) {
-    await Promise.all(drafts.map((d) => clearDraft(d.message_id)));
   }
 
   return <Slot />;
