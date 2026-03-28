@@ -65,6 +65,61 @@ export default function RecordScreen() {
     }
   }, [threadId]);
 
+  const handleStartRecording = useCallback(async () => {
+    if (!adapter || !user) {
+      setErrorMessage('Not ready — please try again.');
+      return;
+    }
+
+    const messageId = sessionId;
+    messageIdRef.current = messageId;
+    startTimeRef.current = Date.now();
+
+    await saveDraft({
+      message_id: messageId,
+      thread_id: threadId,
+      group_id: groupId ?? null,
+      started_at: new Date().toISOString(),
+      chunks_uploaded: [],
+      status: 'recording',
+    });
+
+    uploaderRef.current = new ChunkUploader(adapter, {
+      messageId,
+      threadId,
+      groupId: groupId ?? null,
+    }, user.email);
+
+    setIsRecording(true);
+    setElapsedSeconds(0);
+    setErrorMessage(null);
+
+    const start = Date.now();
+    timerRef.current = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+
+    try {
+      await recorderRef.current?.startRecording();
+    } catch (err) {
+      console.error('startRecording failed:', err);
+      setErrorMessage('Failed to start recording.');
+      setIsRecording(false);
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    }
+  }, [adapter, user, sessionId, threadId, groupId]);
+
+  // Auto-start recording when the screen opens with permissions already granted
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (autoStarted.current) return;
+    if (!adapter || !user || !permission?.granted || !micPermission?.granted) return;
+    autoStarted.current = true;
+    // Brief delay so the native camera view finishes mounting before startRecording is called
+    const timer = setTimeout(() => handleStartRecording(), 300);
+    return () => clearTimeout(timer);
+  }, [adapter, user, permission?.granted, micPermission?.granted, handleStartRecording]);
+
   if (!permission || !micPermission) {
     return <View style={styles.container} />;
   }
@@ -99,51 +154,6 @@ export default function RecordScreen() {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
-    }
-  }
-
-  async function handleStartRecording() {
-    if (!adapter || !user) {
-      setErrorMessage('Not ready — please try again.');
-      return;
-    }
-
-    const messageId = sessionId;
-    messageIdRef.current = messageId;
-    startTimeRef.current = Date.now();
-
-    await saveDraft({
-      message_id: messageId,
-      thread_id: threadId,
-      group_id: groupId ?? null,
-      started_at: new Date().toISOString(),
-      chunks_uploaded: [],
-      status: 'recording',
-    });
-
-    uploaderRef.current = new ChunkUploader(adapter, {
-      messageId,
-      threadId,
-      groupId: groupId ?? null,
-    }, user.email);
-
-    setIsRecording(true);
-    setElapsedSeconds(0);
-    setErrorMessage(null);
-
-    // Elapsed timer
-    const start = Date.now();
-    timerRef.current = setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-
-    try {
-      await recorderRef.current?.startRecording();
-    } catch (err) {
-      console.error('startRecording failed:', err);
-      setErrorMessage('Failed to start recording.');
-      setIsRecording(false);
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     }
   }
 
