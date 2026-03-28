@@ -75,7 +75,6 @@ export default function RecordScreen() {
 
     const messageId = sessionId;
     messageIdRef.current = messageId;
-    startTimeRef.current = Date.now();
 
     await saveDraft({
       message_id: messageId,
@@ -96,19 +95,21 @@ export default function RecordScreen() {
     setElapsedSeconds(0);
     setErrorMessage(null);
 
-    const start = Date.now();
-    timerRef.current = setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-
     try {
       await recorderRef.current?.startRecording();
     } catch (err) {
       console.error('startRecording failed:', err);
       setErrorMessage('Failed to start recording.');
       setIsRecording(false);
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      return;
     }
+
+    // Start timing only after the camera is actually recording
+    const start = Date.now();
+    startTimeRef.current = start;
+    timerRef.current = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
   }, [adapter, user, sessionId, convId]);
 
   const autoStarted = useRef(false);
@@ -165,11 +166,12 @@ export default function RecordScreen() {
       console.error('stopRecording failed:', err);
     }
 
+    const durationSeconds = Math.round((Date.now() - startTimeRef.current) / 1000);
+
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     const uploader = uploaderRef.current;
     const messageId = messageIdRef.current;
-    const durationSeconds = Math.round((Date.now() - startTimeRef.current) / 1000);
     const email = user?.email ?? '';
 
     uploaderRef.current = null;
