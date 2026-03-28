@@ -61,6 +61,10 @@ public class SeamlessPlayerModule: Module {
             AsyncFunction("seekToChunk") { (view: SeamlessPlayerView, windowIndex: Int) in
                 view.seekToChunk(windowIndex)
             }.runOnQueue(.main)
+
+            AsyncFunction("setVolumeBoost") { (view: SeamlessPlayerView, level: Int) in
+                view.setVolumeBoost(level)
+            }.runOnQueue(.main)
         }
     }
 }

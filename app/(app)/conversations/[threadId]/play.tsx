@@ -59,6 +59,7 @@ export default function PlayScreen() {
   const [hasNotes, setHasNotes] = useState(false);
   const [scrubFraction, setScrubFraction] = useState(0);
   const [isSeeking, setIsSeeking] = useState(false);
+  const [volumeBoost, setVolumeBoost] = useState(false);
   const scrubBarWidthRef = useRef(0);
   const scrubBarPageXRef = useRef(0);
   const scrubTrackRef = useRef<View>(null);
@@ -90,6 +91,12 @@ export default function PlayScreen() {
     setSpeed(next);
     playerRef.current?.setSpeed(next);
   }, [speed]);
+
+  const toggleVolumeBoost = useCallback(() => {
+    const next = !volumeBoost;
+    setVolumeBoost(next);
+    playerRef.current?.setVolumeBoost(next ? 1 : 0);
+  }, [volumeBoost]);
 
   const togglePlayPause = useCallback(() => {
     if (pausedRef.current) {
@@ -608,6 +615,9 @@ export default function PlayScreen() {
                 onToggle={() => setNotesVisible((v) => !v)}
                 hasNotes={hasNotes}
               />
+              <TouchableOpacity onPress={toggleVolumeBoost} style={[styles.speedBadge, volumeBoost && styles.boostBadgeActive]}>
+                <Text style={styles.speedText}>{volumeBoost ? '🔊' : '🔈'}</Text>
+              </TouchableOpacity>
               <TouchableOpacity onPress={cycleSpeed} style={styles.speedBadge}>
                 <Text style={styles.speedText}>{speed === 1 ? '1x' : `${speed}x`}</Text>
               </TouchableOpacity>
@@ -688,6 +698,7 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 4,
   },
+  boostBadgeActive: { backgroundColor: 'rgba(255,214,10,0.35)' },
   speedText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   durationText: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontVariant: ['tabular-nums'] },
   liveBadge: {

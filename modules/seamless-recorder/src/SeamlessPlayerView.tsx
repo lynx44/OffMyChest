@@ -22,6 +22,7 @@ export interface SeamlessPlayerRef {
   appendChunks: (urls: string[]) => Promise<void>;
   getLoadedChunkCount: () => Promise<number>;
   seekToChunk: (windowIndex: number) => Promise<void>;
+  setVolumeBoost: (level: number) => Promise<void>;
 }
 
 interface NativeProps {
@@ -77,6 +78,9 @@ export const SeamlessPlayerView = forwardRef<SeamlessPlayerRef, Props>(
       },
       async seekToChunk(windowIndex: number) {
         await (nativeRef.current as any)?.seekToChunk(windowIndex);
+      },
+      async setVolumeBoost(level: number) {
+        await (nativeRef.current as any)?.setVolumeBoost(level);
       },
     }));
 

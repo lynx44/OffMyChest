@@ -3,6 +3,7 @@ package expo.modules.seamlessrecorder
 import android.content.Context
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import android.util.Log
 import android.view.TextureView
@@ -61,6 +62,8 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
   private var suppressEnded = false
   /** When STATE_ENDED and new chunks are added, seek to this window once timeline updates */
   private var pendingResumeChunk: Int = -1
+  private var loudnessEnhancer: LoudnessEnhancer? = null
+  private var pendingBoostLevel: Int = 0
 
   init {
     addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -175,11 +178,36 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     exoPlayer.playWhenReady = true
     player = exoPlayer
 
+    // Apply any pending boost now that we have an audio session
+    applyLoudnessBoost(pendingBoostLevel, exoPlayer.audioSessionId)
+
     // Register with PlaybackService for background audio + notification
     PlaybackService.currentPlayer = exoPlayer
     PlaybackService.onPlayerChanged()
 
     Log.d(TAG, "Playing ${urls.size} chunks via ConcatenatingMediaSource")
+  }
+
+  fun setVolumeBoost(level: Int) {
+    pendingBoostLevel = level
+    val sessionId = player?.audioSessionId ?: return
+    applyLoudnessBoost(level, sessionId)
+  }
+
+  private fun applyLoudnessBoost(level: Int, audioSessionId: Int) {
+    loudnessEnhancer?.release()
+    loudnessEnhancer = null
+    if (level <= 0 || audioSessionId == 0) return
+    try {
+      val enhancer = LoudnessEnhancer(audioSessionId)
+      // 800 milliBels ≈ 8 dB perceptual boost — noticeably louder without heavy distortion
+      enhancer.setTargetGain(800)
+      enhancer.enabled = true
+      loudnessEnhancer = enhancer
+      Log.d(TAG, "LoudnessEnhancer enabled: 800mB boost on session $audioSessionId")
+    } catch (e: Exception) {
+      Log.w(TAG, "LoudnessEnhancer unavailable: ${e.message}")
+    }
   }
 
   /**
@@ -314,6 +342,8 @@ class SeamlessPlayerView(context: Context, appContext: AppContext) :
     cacheDataSourceFactory = null
     loadedChunkCount = 0
     isLiveMode = false
+    loudnessEnhancer?.release()
+    loudnessEnhancer = null
   }
 
   override fun onDetachedFromWindow() {

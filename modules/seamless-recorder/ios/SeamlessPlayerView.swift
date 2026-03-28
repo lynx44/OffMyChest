@@ -1,7 +1,52 @@
 import ExpoModulesCore
 import AVFoundation
 import MediaPlayer
+import MediaToolbox
 import UIKit
+
+// MARK: - Gain tap
+
+/// Creates an MTAudioProcessingTap that multiplies every PCM sample by `gain`.
+/// The gain value is heap-allocated so the C callbacks can access it without captures.
+private func makeGainTap(_ gain: Float) -> MTAudioProcessingTap? {
+    let gainPtr = UnsafeMutablePointer<Float>.allocate(capacity: 1)
+    gainPtr.initialize(to: gain)
+
+    var callbacks = MTAudioProcessingTapCallbacks(
+        version: kMTAudioProcessingTapCallbacksVersion_0,
+        clientInfo: UnsafeMutableRawPointer(gainPtr),
+        init: { (tap, clientInfo, storageOut) in
+            storageOut?.pointee = clientInfo
+        } as MTAudioProcessingTapInitCallback,
+        finalize: { (tap) in
+            MTAudioProcessingTapGetStorage(tap)
+                .assumingMemoryBound(to: Float.self)
+                .deallocate()
+        } as MTAudioProcessingTapFinalizeCallback,
+        prepare: nil,
+        unprepare: nil,
+        process: { (tap, numberFrames, flags, bufferListInOut, numberFramesOut, flagsOut) in
+            MTAudioProcessingTapGetSourceAudio(tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
+            let gain = MTAudioProcessingTapGetStorage(tap).load(as: Float.self)
+            guard gain > 1.0 else { return }
+            let buffers = UnsafeMutableAudioBufferListPointer(bufferListInOut)
+            for buffer in buffers {
+                guard let data = buffer.mData else { continue }
+                let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+                let samples = data.assumingMemoryBound(to: Float.self)
+                for i in 0..<count { samples[i] *= gain }
+            }
+        } as MTAudioProcessingTapProcessCallback
+    )
+
+    var tap: Unmanaged<MTAudioProcessingTap>?
+    guard MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks,
+                                     kMTAudioProcessingTapCreationFlag_PostEffects, &tap) == noErr else {
+        gainPtr.deallocate()
+        return nil
+    }
+    return tap?.takeRetainedValue()
+}
 
 // MARK: - Chunk Cache
 
@@ -92,6 +137,7 @@ class SeamlessPlayerView: ExpoView {
     private var endObserver: NSObjectProtocol?
     private var errorObservers: [NSObjectProtocol] = []
     private let chunkCache = ChunkCache.shared
+    private var audioBoostGain: Float = 1.0
 
     required init(appContext: AppContext?) {
         super.init(appContext: appContext)
@@ -112,6 +158,7 @@ class SeamlessPlayerView: ExpoView {
         let playURL = chunkCache.localURL(for: url) ?? url
         let item = AVPlayerItem(url: playURL)
         item.preferredForwardBufferDuration = 30
+        if audioBoostGain > 1.0 { applyBoostToItem(item, gain: audioBoostGain) }
         return item
     }
 
@@ -351,6 +398,33 @@ class SeamlessPlayerView: ExpoView {
 
     func getLoadedChunkCount() -> Int {
         return loadedChunkCount
+    }
+
+    func setVolumeBoost(_ level: Int) {
+        audioBoostGain = level > 0 ? 2.5 : 1.0
+        if audioBoostGain > 1.0 {
+            for item in allItems { applyBoostToItem(item, gain: audioBoostGain) }
+            NSLog("[%@] Volume boost enabled (gain=%.1f)", SeamlessPlayerView.TAG, audioBoostGain)
+        } else {
+            for item in allItems { item.audioMix = nil }
+            NSLog("[%@] Volume boost disabled", SeamlessPlayerView.TAG)
+        }
+    }
+
+    /// Asynchronously loads the audio track for an AVPlayerItem and attaches a gain tap.
+    private func applyBoostToItem(_ item: AVPlayerItem, gain: Float) {
+        item.asset.loadValuesAsynchronously(forKeys: ["tracks"]) { [weak item] in
+            guard let item = item else { return }
+            var error: NSError?
+            guard item.asset.statusOfValue(forKey: "tracks", error: &error) == .loaded else { return }
+            guard let track = item.asset.tracks(withMediaType: .audio).first else { return }
+            guard let tap = makeGainTap(gain) else { return }
+            let params = AVMutableAudioMixInputParameters(track: track)
+            params.audioTapProcessor = tap
+            let mix = AVMutableAudioMix()
+            mix.inputParameters = [params]
+            DispatchQueue.main.async { item.audioMix = mix }
+        }
     }
 
     func seekToChunk(_ windowIndex: Int) {
