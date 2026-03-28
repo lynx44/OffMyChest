@@ -44,3 +44,4 @@ yarn-error.*
 
 # local module build artifacts
 modules/*/android/build/
+hs_err_pid*.log
