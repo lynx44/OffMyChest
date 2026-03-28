@@ -13,7 +13,7 @@ import {
 
 import { useAuth } from '../../../../src/auth/GoogleAuthProvider';
 import { ChunkUploader } from '../../../../src/recording/ChunkUploader';
-import { saveDraft, updateDraftStatus } from '../../../../src/recording/draftStore';
+import { saveDraft, updateDraftStatus, clearDraft } from '../../../../src/recording/draftStore';
 import { useStorageAdapter } from '../../../../src/storage/useStorageAdapter';
 import { RecordingStatus } from '../../../../src/recording/recordingTypes';
 import {
@@ -197,8 +197,14 @@ export default function RecordScreen() {
       const uploadedChunks = await uploader.waitForAll();
       await uploader.finalize(uploadedChunks, durationSeconds, email);
       console.log(`[Record] Background finalize complete for ${messageId}`);
-    } catch (err) {
-      console.error(`[Record] Background finalize failed for ${messageId}:`, err);
+    } catch (err: any) {
+      if (err?.status === 404) {
+        // Video was deleted before finalization completed — clean up the draft and move on
+        console.log(`[Record] Video ${messageId} was deleted before finalize — clearing draft`);
+        await clearDraft(messageId).catch(() => {});
+      } else {
+        console.error(`[Record] Background finalize failed for ${messageId}:`, err);
+      }
     } finally {
       setBgUploads((n) => n - 1);
     }
