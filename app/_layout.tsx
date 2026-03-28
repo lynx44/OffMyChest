@@ -1,10 +1,12 @@
-import { Linking } from 'react-native';
+import { AppState, Linking } from 'react-native';
 import { Slot, useRouter, useSegments } from 'expo-router';
 import React, { useEffect, useRef } from 'react';
 
 import { GoogleAuthProvider, useAuth } from '../src/auth/GoogleAuthProvider';
 import { initializeOutbox } from '../src/outbox/outboxService';
 import { getIncompleteDrafts, clearDraft } from '../src/recording/draftStore';
+import { setupNotifications, checkForNewMessages, initializeSeenMessages } from '../src/notifications/notificationService';
+import { registerBackgroundFetch } from '../src/notifications/backgroundTask';
 
 function AuthGate() {
   const { user, isLoading } = useAuth();
@@ -24,7 +26,7 @@ function AuthGate() {
     }
   }, [user, isLoading, segments]);
 
-  // Initialize Drive folder + check for orphaned drafts on first authenticated load
+  // Initialize Drive folder, notifications, and check for orphaned drafts on first authenticated load
   useEffect(() => {
     if (!user || initDone.current) return;
     initDone.current = true;
@@ -34,6 +36,24 @@ function AuthGate() {
     });
 
     checkForOrphanedDrafts();
+
+    setupNotifications().then(() => {
+      registerBackgroundFetch().catch(() => {});
+      initializeSeenMessages(user.sub, user.email)
+        .then(() => checkForNewMessages())
+        .catch(() => {});
+    }).catch(() => {});
+  }, [user]);
+
+  // Poll for new messages whenever the app comes to the foreground
+  useEffect(() => {
+    if (!user) return;
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        checkForNewMessages().catch(() => {});
+      }
+    });
+    return () => sub.remove();
   }, [user]);
 
   // Handle deep links for joining conversations: offmychest://join?conv=...

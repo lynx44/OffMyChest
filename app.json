@@ -20,7 +20,7 @@
         "NSCameraUsageDescription": "Off My Chest needs camera access to record video messages.",
         "NSMicrophoneUsageDescription": "Off My Chest needs microphone access to record video messages.",
         "NSContactsUsageDescription": "Off My Chest uses your contacts to help you invite people to conversations.",
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": ["audio", "fetch", "remote-notification"]
       }
     },
     "android": {
@@ -48,6 +48,14 @@
       "expo-router",
       "expo-secure-store",
       "expo-contacts",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/adaptive-icon.png",
+          "color": "#007AFF",
+          "defaultChannel": "default"
+        }
+      ],
       [
         "@react-native-google-signin/google-signin",
         {
