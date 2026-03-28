@@ -1,7 +1,6 @@
 export interface RecordingSession {
   messageId: string;
-  threadId: string;
-  groupId: string | null;
+  convId: string;
 }
 
 /** Uploaded chunk: index + public Drive download URL */

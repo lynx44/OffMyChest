@@ -15,6 +15,7 @@ export class ChunkUploader {
   private readonly adapter: StorageAdapter;
   private readonly session: RecordingSession;
   private readonly senderEmail: string;
+  private readonly senderOutboxUrl: string;
 
   /** Parallel upload promises, one per chunk */
   private readonly uploadPromises: Promise<UploadedChunk>[] = [];
@@ -34,10 +35,16 @@ export class ChunkUploader {
   /** Serializes manifest updates so they don't race */
   private manifestQueue: Promise<void> = Promise.resolve();
 
-  constructor(adapter: StorageAdapter, session: RecordingSession, senderEmail: string) {
+  constructor(
+    adapter: StorageAdapter,
+    session: RecordingSession,
+    senderEmail: string,
+    senderOutboxUrl: string,
+  ) {
     this.adapter = adapter;
     this.session = session;
     this.senderEmail = senderEmail;
+    this.senderOutboxUrl = senderOutboxUrl;
   }
 
   /**
@@ -54,7 +61,7 @@ export class ChunkUploader {
     try {
       console.log(`[Upload] chunk ${index} uploading from ${fileUri}`);
       const publicUrl = await this.adapter.uploadChunk(
-        this.session.threadId,
+        this.session.convId,
         this.session.messageId,
         index,
         fileUri,
@@ -94,9 +101,9 @@ export class ChunkUploader {
     const manifest: MessageManifest = {
       version: OUTBOX_VERSION,
       message_id: this.session.messageId,
-      thread_id: this.session.threadId,
-      group_id: this.session.groupId,
+      conv_id: this.session.convId,
       sender: this.senderEmail,
+      sender_outbox_url: this.senderOutboxUrl,
       timestamp: new Date().toISOString(),
       duration_seconds: 0, // unknown while recording
       chunks: contiguous,
@@ -108,7 +115,7 @@ export class ChunkUploader {
     if (!this.manifestFileId) {
       // First publish
       const { url, fileId } = await this.adapter.uploadManifest(
-        this.session.threadId,
+        this.session.convId,
         this.session.messageId,
         manifest,
       );
@@ -125,8 +132,7 @@ export class ChunkUploader {
     if (!this.outboxPublished && this.manifestUrl) {
       const entry: OutboxEntry = {
         message_id: this.session.messageId,
-        thread_id: this.session.threadId,
-        group_id: this.session.groupId,
+        conv_id: this.session.convId,
         timestamp: manifest.timestamp,
         duration_seconds: 0,
         manifest_url: this.manifestUrl,
@@ -183,7 +189,7 @@ export class ChunkUploader {
     if (thumbnailUri) {
       try {
         thumbnailUrl = await this.adapter.uploadThumbnail(
-          this.session.threadId,
+          this.session.convId,
           this.session.messageId,
           thumbnailUri,
         );
@@ -197,9 +203,9 @@ export class ChunkUploader {
     const manifest: MessageManifest = {
       version: OUTBOX_VERSION,
       message_id: this.session.messageId,
-      thread_id: this.session.threadId,
-      group_id: this.session.groupId,
+      conv_id: this.session.convId,
       sender: senderEmail,
+      sender_outbox_url: this.senderOutboxUrl,
       timestamp: new Date().toISOString(),
       duration_seconds: totalDurationSeconds,
       chunk_duration_seconds: chunkCount > 0 ? totalDurationSeconds / chunkCount : 0,
@@ -213,7 +219,7 @@ export class ChunkUploader {
       await this.adapter.updateManifest(this.manifestFileId, manifest);
     } else {
       const { url, fileId } = await this.adapter.uploadManifest(
-        this.session.threadId,
+        this.session.convId,
         this.session.messageId,
         manifest,
       );
@@ -223,8 +229,7 @@ export class ChunkUploader {
 
     const entry: OutboxEntry = {
       message_id: this.session.messageId,
-      thread_id: this.session.threadId,
-      group_id: this.session.groupId,
+      conv_id: this.session.convId,
       timestamp: manifest.timestamp,
       duration_seconds: totalDurationSeconds,
       manifest_url: this.manifestUrl!,

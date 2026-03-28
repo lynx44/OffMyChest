@@ -16,15 +16,12 @@ export function publicDownloadUrl(fileId: string): string {
 // AsyncStorage keys
 export const STORAGE_KEYS = {
   driveFolderId: (sub: string) => `drive:folderId:${sub}`,
-  driveOutboxFileId: (sub: string) => `drive:outboxFileId:${sub}`,
-  driveOutboxPublicUrl: (sub: string) => `drive:outboxPublicUrl:${sub}`,
-  contacts: (sub: string) => `contacts:${sub}`,
-  notes: (threadId: string) => `notes:${threadId}`,
-  myThreadOutboxFileId: (threadId: string) => `thread:outboxFileId:${threadId}`,
-  myThreadOutboxUrl: (threadId: string) => `thread:outboxUrl:${threadId}`,
-  notesUndo: (threadId: string) => `notes_undo:${threadId}`,
+  conversations: (sub: string) => `conversations:${sub}`,
+  myConvOutboxFileId: (convId: string) => `conv:outboxFileId:${convId}`,
+  myConvOutboxUrl: (convId: string) => `conv:outboxUrl:${convId}`,
+  notes: (convId: string) => `notes:${convId}`,
+  notesUndo: (convId: string) => `notes_undo:${convId}`,
   draft: (messageId: string) => `draft:${messageId}`,
-  cachedOutboxUpdatedAt: (outboxUrl: string) => `poll:updatedAt:${outboxUrl}`,
 } as const;
 
 // SecureStore keys

@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 
-import { DRIVE_FOLDER_NAME, OUTBOX_FILENAME, OUTBOX_VERSION, STORAGE_KEYS, publicDownloadUrl } from '../shared/constants';
-import { MessageManifest, Outbox, OutboxEntry, ThreadOutbox } from '../shared/types';
+import { DRIVE_FOLDER_NAME, OUTBOX_FILENAME, OUTBOX_VERSION, STORAGE_KEYS } from '../shared/constants';
+import { MessageManifest, ConversationOutbox, OutboxEntry } from '../shared/types';
 import { DriveApiError } from '../shared/errors';
 import {
   DriveFile,
@@ -21,17 +21,13 @@ import { enqueueOutboxWrite } from './outboxQueue';
 
 export class GoogleDriveAdapter implements StorageAdapter {
   private readonly userSub: string;
-  private readonly userEmail: string;
-  private readonly userName: string;
-  private accessToken: string;
+  private readonly accessToken: string;
   private readonly getValidToken: (() => Promise<string>) | null;
 
-  /** Cached Drive file ID for root outbox.json */
-  private outboxFileId: string | null = null;
   /** Cached root folder ID */
   private folderId: string | null = null;
-  /** Cached thread outbox file IDs: threadId → Drive file ID */
-  private threadOutboxFileIds: Map<string, string> = new Map();
+  /** Cached conversation outbox file IDs: convId → Drive file ID */
+  private convOutboxFileIds: Map<string, string> = new Map();
 
   constructor(opts: {
     userSub: string;
@@ -41,15 +37,13 @@ export class GoogleDriveAdapter implements StorageAdapter {
     getValidToken?: () => Promise<string>;
   }) {
     this.userSub = opts.userSub;
-    this.userEmail = opts.userEmail;
-    this.userName = opts.userName;
     this.accessToken = opts.accessToken;
     this.getValidToken = opts.getValidToken ?? null;
   }
 
   /** Call after token refresh to keep the adapter current. */
   updateAccessToken(token: string): void {
-    this.accessToken = token;
+    (this as any).accessToken = token;
   }
 
   /** Get a fresh token, refreshing if needed. */
@@ -57,7 +51,7 @@ export class GoogleDriveAdapter implements StorageAdapter {
     if (this.getValidToken) {
       try {
         const token = await this.getValidToken();
-        this.accessToken = token;
+        (this as any).accessToken = token;
         return token;
       } catch {
         // Fall back to current token
@@ -71,126 +65,66 @@ export class GoogleDriveAdapter implements StorageAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Ensure the /OffMyChest folder and outbox.json exist in Drive.
-   * Safe to call on every app launch — searches before creating.
-   * Returns the public URL of outbox.json.
+   * Ensure the /OffMyChest folder exists in Drive.
+   * Safe to call on every app launch.
    */
-  async initialize(): Promise<string> {
-    const folder = await this.getOrCacheFolder();
-    const outboxUrl = await this.getOrCreateOutbox(folder.id);
-    return outboxUrl;
+  async initialize(): Promise<void> {
+    await this.getOrCacheFolder();
   }
 
   private async getOrCacheFolder(): Promise<DriveFile> {
-    // Check AsyncStorage cache
     const cached = await AsyncStorage.getItem(STORAGE_KEYS.driveFolderId(this.userSub));
     if (cached) {
       this.folderId = cached;
       return { id: cached, name: DRIVE_FOLDER_NAME };
     }
 
-    // Search Drive (handles reinstall)
     const folder = await getOrCreateAppFolder(DRIVE_FOLDER_NAME, await this.freshToken());
     this.folderId = folder.id;
     await AsyncStorage.setItem(STORAGE_KEYS.driveFolderId(this.userSub), folder.id);
     return folder;
   }
 
-  private async getOrCreateOutbox(folderId: string): Promise<string> {
-    // Check AsyncStorage for existing outbox file ID + URL
-    const [existingFileId, existingUrl] = await Promise.all([
-      AsyncStorage.getItem(STORAGE_KEYS.driveOutboxFileId(this.userSub)),
-      AsyncStorage.getItem(STORAGE_KEYS.driveOutboxPublicUrl(this.userSub)),
-    ]);
-
-    if (existingFileId && existingUrl) {
-      this.outboxFileId = existingFileId;
-      return existingUrl;
-    }
-
-    // Create root outbox.json — identity/directory only, no messages
-    const rootOutbox: Outbox = {
-      version: OUTBOX_VERSION,
-      owner: this.userName,
-      owner_email: this.userEmail,
-      updated_at: new Date().toISOString(),
-      threads: {},
-    };
-
-    const token = await this.freshToken();
-    const file = await uploadJsonFile(OUTBOX_FILENAME, rootOutbox, folderId, token);
-    const publicUrl = await shareFilePublic(file.id, token);
-
-    this.outboxFileId = file.id;
-    await Promise.all([
-      AsyncStorage.setItem(STORAGE_KEYS.driveOutboxFileId(this.userSub), file.id),
-      AsyncStorage.setItem(STORAGE_KEYS.driveOutboxPublicUrl(this.userSub), publicUrl),
-    ]);
-
-    return publicUrl;
-  }
+  // ---------------------------------------------------------------------------
+  // Conversation outbox
+  // ---------------------------------------------------------------------------
 
   /**
-   * Ensure the per-thread outbox file exists at threads/{threadId}/outbox.json.
-   * Creates it on first call, caches the result. Also registers the URL in the
-   * root outbox's threads map so contacts can discover it.
+   * Create (or return cached) the outbox.json for this conversation.
+   * Stored at conversations/{convId}/outbox.json in Drive.
    */
-  private async ensureThreadOutbox(threadId: string): Promise<{ fileId: string; url: string }> {
+  async createConversationOutbox(convId: string): Promise<{ url: string; fileId: string }> {
     // Check in-memory cache
-    const cachedFileId = this.threadOutboxFileIds.get(threadId);
-    const cachedUrl = await AsyncStorage.getItem(STORAGE_KEYS.myThreadOutboxUrl(threadId));
-    if (cachedFileId && cachedUrl) return { fileId: cachedFileId, url: cachedUrl };
+    const cachedFileId = this.convOutboxFileIds.get(convId);
+    const cachedUrl = await AsyncStorage.getItem(STORAGE_KEYS.myConvOutboxUrl(convId));
+    if (cachedFileId && cachedUrl) return { url: cachedUrl, fileId: cachedFileId };
 
-    // Check AsyncStorage cache
-    const storedFileId = await AsyncStorage.getItem(STORAGE_KEYS.myThreadOutboxFileId(threadId));
+    const storedFileId = await AsyncStorage.getItem(STORAGE_KEYS.myConvOutboxFileId(convId));
     if (storedFileId && cachedUrl) {
-      this.threadOutboxFileIds.set(threadId, storedFileId);
-      return { fileId: storedFileId, url: cachedUrl };
+      this.convOutboxFileIds.set(convId, storedFileId);
+      return { url: cachedUrl, fileId: storedFileId };
     }
 
-    // Create the thread folder and outbox.json inside it
     const folderId = await this.ensureFolderId();
-    const threadFolderId = await this.ensureSubfolder(`threads/${threadId}`, folderId);
+    const convFolderId = await this.ensureSubfolder(`conversations/${convId}`, folderId);
 
-    const emptyThreadOutbox: ThreadOutbox = {
+    const emptyOutbox: ConversationOutbox = {
       version: OUTBOX_VERSION,
       updated_at: new Date().toISOString(),
       messages: [],
     };
 
     const token = await this.freshToken();
-    const file = await uploadJsonFile(OUTBOX_FILENAME, emptyThreadOutbox, threadFolderId, token);
+    const file = await uploadJsonFile(OUTBOX_FILENAME, emptyOutbox, convFolderId, token);
     const url = await shareFilePublic(file.id, token);
 
-    // Cache locally
-    this.threadOutboxFileIds.set(threadId, file.id);
+    this.convOutboxFileIds.set(convId, file.id);
     await Promise.all([
-      AsyncStorage.setItem(STORAGE_KEYS.myThreadOutboxFileId(threadId), file.id),
-      AsyncStorage.setItem(STORAGE_KEYS.myThreadOutboxUrl(threadId), url),
+      AsyncStorage.setItem(STORAGE_KEYS.myConvOutboxFileId(convId), file.id),
+      AsyncStorage.setItem(STORAGE_KEYS.myConvOutboxUrl(convId), url),
     ]);
 
-    // Register in root outbox threads map so contacts can discover it
-    await this.registerThreadInRootOutbox(threadId, url);
-
-    return { fileId: file.id, url };
-  }
-
-  /** Add a threadId → url entry to the root outbox's threads map. */
-  private async registerThreadInRootOutbox(threadId: string, threadOutboxUrl: string): Promise<void> {
-    const [rootOutboxUrl, rootFileId] = await Promise.all([
-      AsyncStorage.getItem(STORAGE_KEYS.driveOutboxPublicUrl(this.userSub)),
-      AsyncStorage.getItem(STORAGE_KEYS.driveOutboxFileId(this.userSub)),
-    ]);
-    if (!rootOutboxUrl || !rootFileId) return;
-
-    const current = await fetchPublicJson<Outbox>(rootOutboxUrl);
-    if (current.threads?.[threadId] === threadOutboxUrl) return; // already registered
-    const updated: Outbox = {
-      ...current,
-      threads: { ...(current.threads ?? {}), [threadId]: threadOutboxUrl },
-      updated_at: new Date().toISOString(),
-    };
-    await updateJsonFile(rootFileId, updated, await this.freshToken());
+    return { url, fileId: file.id };
   }
 
   // ---------------------------------------------------------------------------
@@ -198,14 +132,14 @@ export class GoogleDriveAdapter implements StorageAdapter {
   // ---------------------------------------------------------------------------
 
   async uploadChunk(
-    threadId: string,
+    convId: string,
     messageId: string,
     chunkIndex: number,
     fileUri: string,
   ): Promise<string> {
     const folderId = await this.ensureFolderId();
     const chunkFolderId = await this.ensureSubfolder(
-      `threads/${threadId}/${messageId}/chunks`,
+      `conversations/${convId}/${messageId}/chunks`,
       folderId,
     );
     const filename = `chunk_${String(chunkIndex).padStart(3, '0')}.mp4`;
@@ -222,12 +156,15 @@ export class GoogleDriveAdapter implements StorageAdapter {
   }
 
   async uploadManifest(
-    threadId: string,
+    convId: string,
     messageId: string,
     manifest: MessageManifest,
   ): Promise<{ url: string; fileId: string }> {
     const folderId = await this.ensureFolderId();
-    const msgFolderId = await this.ensureSubfolder(`threads/${threadId}/${messageId}`, folderId);
+    const msgFolderId = await this.ensureSubfolder(
+      `conversations/${convId}/${messageId}`,
+      folderId,
+    );
 
     const token = await this.freshToken();
     const file = await uploadJsonFile('manifest.json', manifest, msgFolderId, token);
@@ -240,12 +177,15 @@ export class GoogleDriveAdapter implements StorageAdapter {
   }
 
   async uploadThumbnail(
-    threadId: string,
+    convId: string,
     messageId: string,
     imageUri: string,
   ): Promise<string> {
     const folderId = await this.ensureFolderId();
-    const msgFolderId = await this.ensureSubfolder(`threads/${threadId}/${messageId}`, folderId);
+    const msgFolderId = await this.ensureSubfolder(
+      `conversations/${convId}/${messageId}`,
+      folderId,
+    );
 
     const token = await this.freshToken();
     const sessionUri = await initiateResumableUpload(
@@ -263,20 +203,15 @@ export class GoogleDriveAdapter implements StorageAdapter {
   }
 
   async getChunkUrl(baseUrl: string, chunkPath: string): Promise<string> {
-    // Chunks are already public URLs stored in the manifest — just return them.
-    // The baseUrl + chunkPath combination is only used for manifest-based resolution
-    // in future providers; for Drive, chunk URLs are absolute public links.
     return `${baseUrl}${chunkPath}`;
   }
 
   async updateOutbox(entry: OutboxEntry): Promise<void> {
     return enqueueOutboxWrite(async () => {
-      const { fileId, url } = await this.ensureThreadOutbox(entry.thread_id);
+      const { fileId, url } = await this.createConversationOutbox(entry.conv_id);
 
-      // Fetch latest to avoid stomping concurrent writes
-      const current = await fetchPublicJson<ThreadOutbox>(url);
+      const current = await fetchPublicJson<ConversationOutbox>(url);
 
-      // Upsert by message_id — replace if exists, append if new
       const idx = current.messages.findIndex((m) => m.message_id === entry.message_id);
       if (idx >= 0) {
         current.messages[idx] = entry;
@@ -289,22 +224,19 @@ export class GoogleDriveAdapter implements StorageAdapter {
     });
   }
 
-  async readThreadOutbox(threadId: string): Promise<ThreadOutbox> {
-    const url = await AsyncStorage.getItem(STORAGE_KEYS.myThreadOutboxUrl(threadId));
+  async readConversationOutbox(convId: string): Promise<ConversationOutbox> {
+    const url = await AsyncStorage.getItem(STORAGE_KEYS.myConvOutboxUrl(convId));
     if (!url) return { version: OUTBOX_VERSION, updated_at: new Date().toISOString(), messages: [] };
-    return fetchPublicJson<ThreadOutbox>(url);
+    return fetchPublicJson<ConversationOutbox>(url);
   }
 
-  async deleteMessage(manifestUrl: string, messageId: string, threadId: string): Promise<void> {
+  async deleteMessage(manifestUrl: string, messageId: string, convId: string): Promise<void> {
     const token = await this.freshToken();
 
-    // Extract the manifest file ID from the public download URL
     const match = manifestUrl.match(/[?&]id=([^&]+)/);
     if (!match) throw new Error('Could not extract file ID from manifest URL');
     const manifestFileId = match[1];
 
-    // Get the message folder (parent of manifest.json) and delete it —
-    // trashing the folder removes all chunks, thumbnail, and manifest at once
     const parents = await getFileParents(manifestFileId, token);
     if (parents.length > 0) {
       await deleteFile(parents[0], token);
@@ -312,16 +244,15 @@ export class GoogleDriveAdapter implements StorageAdapter {
       await deleteFile(manifestFileId, token);
     }
 
-    // Remove from the thread outbox
     await enqueueOutboxWrite(async () => {
-      const threadUrl = await AsyncStorage.getItem(STORAGE_KEYS.myThreadOutboxUrl(threadId));
-      const threadFileId = await AsyncStorage.getItem(STORAGE_KEYS.myThreadOutboxFileId(threadId));
-      if (!threadUrl || !threadFileId) return;
+      const outboxUrl = await AsyncStorage.getItem(STORAGE_KEYS.myConvOutboxUrl(convId));
+      const outboxFileId = await AsyncStorage.getItem(STORAGE_KEYS.myConvOutboxFileId(convId));
+      if (!outboxUrl || !outboxFileId) return;
 
-      const current = await fetchPublicJson<ThreadOutbox>(threadUrl);
+      const current = await fetchPublicJson<ConversationOutbox>(outboxUrl);
       current.messages = current.messages.filter((m) => m.message_id !== messageId);
       current.updated_at = new Date().toISOString();
-      await updateJsonFile(threadFileId, current, await this.freshToken());
+      await updateJsonFile(outboxFileId, current, await this.freshToken());
     });
   }
 
@@ -340,14 +271,6 @@ export class GoogleDriveAdapter implements StorageAdapter {
     return folder.id;
   }
 
-  /**
-   * Ensure a nested subfolder path exists under a parent folder.
-   * Creates intermediate folders as needed.
-   * Returns the final folder's Drive file ID.
-   *
-   * Note: Drive has no path concept — folders are files with a parent reference.
-   * Each path segment is resolved in sequence.
-   */
   private async ensureSubfolder(path: string, rootFolderId: string): Promise<string> {
     const segments = path.split('/');
     let currentParentId = rootFolderId;
@@ -363,7 +286,6 @@ export class GoogleDriveAdapter implements StorageAdapter {
 
 // ---------------------------------------------------------------------------
 // Module-level helper — streams a local file to a Drive resumable session URI
-// Uses expo-file-system uploadAsync to avoid binary body issues with fetch.
 // ---------------------------------------------------------------------------
 
 async function uploadFileViaSession(

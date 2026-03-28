@@ -5,9 +5,11 @@ export default function ConversationsLayout() {
   return (
     <Stack>
       <Stack.Screen name="index" options={{ title: 'Conversations' }} />
-      <Stack.Screen name="[threadId]/index" options={{ title: 'Conversation' }} />
+      <Stack.Screen name="new" options={{ title: 'New Conversation' }} />
+      <Stack.Screen name="join" options={{ title: 'Join Conversation' }} />
+      <Stack.Screen name="[convId]/index" options={{ title: 'Conversation' }} />
       <Stack.Screen
-        name="[threadId]/record"
+        name="[convId]/record"
         options={{
           title: 'Record',
           presentation: 'fullScreenModal',
@@ -15,7 +17,7 @@ export default function ConversationsLayout() {
         }}
       />
       <Stack.Screen
-        name="[threadId]/play"
+        name="[convId]/play"
         options={{
           title: '',
           presentation: 'fullScreenModal',

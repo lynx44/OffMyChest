@@ -28,32 +28,67 @@ interface ResumableUploadSession {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Retry helper
+// ---------------------------------------------------------------------------
+
+const RETRY_DELAYS_MS = [1_000, 3_000, 9_000]; // 3 attempts after first failure
+
+function isRetryable(status: number): boolean {
+  // Network errors (status 0), rate limits, and server errors are retryable.
+  // 4xx client errors (except 429) are not — retrying won't help.
+  return status === 0 || status === 429 || status >= 500;
+}
+
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const status = err instanceof DriveApiError ? err.status : 0;
+      if (!isRetryable(status) || attempt === RETRY_DELAYS_MS.length) break;
+      const delay = RETRY_DELAYS_MS[attempt];
+      console.warn(`[Drive] attempt ${attempt + 1} failed (${status}), retrying in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
+// ---------------------------------------------------------------------------
+// Core request
+// ---------------------------------------------------------------------------
+
 async function driveRequest<T>(
   url: string,
   options: RequestInit,
   accessToken: string,
 ): Promise<T> {
-  const headers = new Headers(options.headers);
-  headers.set('Authorization', `Bearer ${accessToken}`);
+  return withRetry(async () => {
+    const headers = new Headers(options.headers);
+    headers.set('Authorization', `Bearer ${accessToken}`);
 
-  const res = await fetch(url, { ...options, headers });
+    const res = await fetch(url, { ...options, headers });
 
-  if (!res.ok) {
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      body = await res.text();
+    if (!res.ok) {
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch {
+        body = await res.text();
+      }
+      throw new DriveApiError(
+        `Drive API ${options.method ?? 'GET'} ${url} failed with ${res.status}`,
+        res.status,
+        body,
+      );
     }
-    throw new DriveApiError(
-      `Drive API ${options.method ?? 'GET'} ${url} failed with ${res.status}`,
-      res.status,
-      body,
-    );
-  }
 
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+    if (res.status === 204) return undefined as T;
+    return res.json() as Promise<T>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -274,31 +309,59 @@ export async function initiateResumableUpload(
   return sessionUri;
 }
 
-/** Step 2: Upload bytes to the resumable session URI. Returns the created DriveFile. */
+/** Step 2: Upload bytes to the resumable session URI, with resume-on-interrupt retries. */
 export async function executeResumableUpload(
   sessionUri: string,
   data: Uint8Array,
   mimeType: string,
 ): Promise<DriveFile> {
-  // Slice to own buffer in case the Uint8Array is a subview (avoids sending extra bytes)
   const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  const res = await fetch(sessionUri, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': mimeType,
-      'Content-Length': String(data.byteLength),
-    },
-    body: buffer,
+
+  return withRetry(async () => {
+    // Query how many bytes Drive has already received (0 if starting fresh)
+    let resumeOffset = 0;
+    const queryRes = await fetch(sessionUri, {
+      method: 'PUT',
+      headers: {
+        'Content-Range': `bytes */${data.byteLength}`,
+        'Content-Length': '0',
+      },
+    });
+
+    if (queryRes.status === 200 || queryRes.status === 201) {
+      // Already complete from a previous attempt
+      return queryRes.json() as Promise<DriveFile>;
+    } else if (queryRes.status === 308) {
+      const range = queryRes.headers.get('Range');
+      if (range) {
+        // Range: bytes=0-N  →  N+1 bytes received
+        resumeOffset = parseInt(range.split('-')[1], 10) + 1;
+      }
+    } else if (queryRes.status === 404) {
+      // Session expired — caller must re-initiate (throw non-retryable)
+      throw new DriveApiError('Resumable upload session expired', 404);
+    }
+    // status 503 / network error falls through to retry
+
+    const slice = resumeOffset > 0 ? buffer.slice(resumeOffset) : buffer;
+    const res = await fetch(sessionUri, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': mimeType,
+        'Content-Length': String(data.byteLength - resumeOffset),
+        ...(resumeOffset > 0
+          ? { 'Content-Range': `bytes ${resumeOffset}-${data.byteLength - 1}/${data.byteLength}` }
+          : {}),
+      },
+      body: slice,
+    });
+
+    if (!res.ok) {
+      throw new DriveApiError(`Resumable upload PUT failed (${res.status})`, res.status);
+    }
+
+    return res.json() as Promise<DriveFile>;
   });
-
-  if (!res.ok) {
-    throw new DriveApiError(
-      `Resumable upload PUT failed (${res.status})`,
-      res.status,
-    );
-  }
-
-  return res.json() as Promise<DriveFile>;
 }
 
 // ---------------------------------------------------------------------------

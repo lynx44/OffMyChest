@@ -1,3 +1,4 @@
+import { Linking } from 'react-native';
 import { Slot, useRouter, useSegments } from 'expo-router';
 import React, { useEffect, useRef } from 'react';
 
@@ -23,24 +24,56 @@ function AuthGate() {
     }
   }, [user, isLoading, segments]);
 
-  // Initialize Drive + check for orphaned drafts on first authenticated load
+  // Initialize Drive folder + check for orphaned drafts on first authenticated load
   useEffect(() => {
     if (!user || initDone.current) return;
     initDone.current = true;
 
     initializeOutbox(user).catch((err) => {
-      console.error('Failed to initialize outbox:', err);
+      console.error('Failed to initialize Drive folder:', err);
     });
 
     checkForOrphanedDrafts();
   }, [user]);
 
+  // Handle deep links for joining conversations: offmychest://join?conv=...
+  useEffect(() => {
+    if (!user) return;
+
+    function handleUrl(url: string) {
+      try {
+        const parsed = new URL(url);
+        if (parsed.hostname === 'join') {
+          const conv = parsed.searchParams.get('conv');
+          const outbox = parsed.searchParams.get('outbox');
+          const name = parsed.searchParams.get('name');
+          const fromName = parsed.searchParams.get('fromName');
+          const fromEmail = parsed.searchParams.get('fromEmail');
+          if (conv && outbox) {
+            const query = new URLSearchParams({ conv, outbox });
+            if (name) query.set('name', name);
+            if (fromName) query.set('fromName', fromName);
+            if (fromEmail) query.set('fromEmail', fromEmail);
+            router.push(`/(app)/conversations/join?${query.toString()}`);
+          }
+        }
+      } catch {}
+    }
+
+    // Handle URL that opened the app
+    Linking.getInitialURL().then((url) => {
+      if (url) handleUrl(url);
+    });
+
+    // Handle URLs while app is open
+    const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    return () => sub.remove();
+  }, [user, router]);
+
   async function checkForOrphanedDrafts() {
     try {
       const drafts = await getIncompleteDrafts();
       if (drafts.length === 0) return;
-      // Local chunk files no longer exist after an app restart, so resumption
-      // isn't possible. Silently clear any stale drafts.
       await Promise.all(drafts.map((d) => clearDraft(d.message_id)));
     } catch (err) {
       console.error('Draft check failed:', err);

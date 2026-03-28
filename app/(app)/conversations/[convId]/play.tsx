@@ -41,7 +41,7 @@ interface VideoBoundary {
 const LIVE_POLL_INTERVAL_MS = 3000;
 
 export default function PlayScreen() {
-  const { threadId, manifest: encodedManifest } = useLocalSearchParams<{ threadId: string; manifest: string }>();
+  const { convId, manifest: encodedManifest } = useLocalSearchParams<{ convId: string; manifest: string }>();
   const router = useRouter();
 
   const initialManifestUrl = encodedManifest ? decodeParam(encodedManifest) : '';
@@ -73,14 +73,9 @@ export default function PlayScreen() {
   const elapsedOffsetRef = useRef(0);
   const isLiveRef = useRef(false);
   const liveManifestUrlRef = useRef('');
-  /** Tick counter for periodic position save (every 10 ticks × 500ms = 5s) */
   const saveTickRef = useRef(0);
-
-  /** Tracks which chunks belong to which video in the concatenated playlist */
   const videoBoundariesRef = useRef<VideoBoundary[]>([]);
-  /** Videos already marked completed during this playback session */
   const completedInSessionRef = useRef<Set<string>>(new Set());
-  /** Last detected video index (for boundary crossing detection) */
   const lastVideoIdxRef = useRef(0);
 
   const SPEEDS = [1, 1.5, 2, 3];
@@ -108,7 +103,6 @@ export default function PlayScreen() {
     setPaused(pausedRef.current);
   }, []);
 
-  /** Find which video boundary contains a given chunk window index */
   const findBoundary = useCallback((windowIdx: number): { boundary: VideoBoundary; videoIdx: number } | null => {
     const boundaries = videoBoundariesRef.current;
     for (let i = 0; i < boundaries.length; i++) {
@@ -120,7 +114,6 @@ export default function PlayScreen() {
     return null;
   }, []);
 
-  /** Save current position as partial watch state, adjusted for multi-video playlist */
   const savePartialProgress = useCallback(async () => {
     if (!playerRef.current) return;
     try {
@@ -133,7 +126,6 @@ export default function PlayScreen() {
       if (!result) return;
 
       const { boundary } = result;
-      // Position relative to this video (not the concatenated playlist)
       const relativeWindowIdx = windowIdx - boundary.startIdx;
       const relativePositionMs = relativeWindowIdx * 1_000_000 + windowOffset;
       const chunkDurMs = boundary.count > 0 ? (boundary.duration * 1000) / boundary.count : 0;
@@ -147,7 +139,6 @@ export default function PlayScreen() {
     } catch {}
   }, [findBoundary]);
 
-  /** Poll manifest for new chunks during live recording */
   const startLivePolling = useCallback((manifestUrl: string) => {
     if (pollTimerRef.current) return;
     pollTimerRef.current = setInterval(async () => {
@@ -158,13 +149,11 @@ export default function PlayScreen() {
 
         if (newChunks.length > loaded) {
           const toAppend = newChunks.slice(loaded);
-          console.log(`[Live] Appending ${toAppend.length} new chunks`);
           await playerRef.current?.appendChunks(toAppend);
           loadedChunkCountRef.current = newChunks.length;
         }
 
         if (manifest.status === 'complete' || !manifest.status) {
-          console.log('[Live] Recording complete, stopping poll');
           setIsLive(false);
           isLiveRef.current = false;
           liveManifestUrlRef.current = '';
@@ -187,7 +176,6 @@ export default function PlayScreen() {
     }
   }, []);
 
-  // Cleanup timers on unmount
   useEffect(() => {
     return () => {
       stopLivePolling();
@@ -198,14 +186,12 @@ export default function PlayScreen() {
     };
   }, [stopLivePolling]);
 
-  // Check if thread has notes
   useEffect(() => {
-    if (threadId) {
-      getNotes(threadId).then((n) => setHasNotes(n.length > 0));
+    if (convId) {
+      getNotes(convId).then((n) => setHasNotes(n.length > 0));
     }
-  }, [threadId]);
+  }, [convId]);
 
-  // Start/stop background playback service
   useEffect(() => {
     if (loadState === 'playing') {
       startBackgroundPlayback().catch(() => {});
@@ -215,14 +201,12 @@ export default function PlayScreen() {
     };
   }, [loadState]);
 
-  // Re-apply playback speed when playing starts
   useEffect(() => {
     if (loadState === 'playing' && speedRef.current !== 1) {
       playerRef.current?.setSpeed(speedRef.current);
     }
   }, [loadState]);
 
-  // Poll native player for elapsed time + detect video boundary crossings
   useEffect(() => {
     if (loadState !== 'playing') return;
     elapsedTimerRef.current = setInterval(async () => {
@@ -238,7 +222,6 @@ export default function PlayScreen() {
         if (result) {
           const { boundary, videoIdx } = result;
 
-          // Detect boundary crossing — mark previous videos as completed
           if (videoIdx > lastVideoIdxRef.current) {
             for (let i = lastVideoIdxRef.current; i < videoIdx; i++) {
               const prevUrl = videoBoundariesRef.current[i]?.url;
@@ -250,15 +233,14 @@ export default function PlayScreen() {
             lastVideoIdxRef.current = videoIdx;
           }
 
-          // Update manifestUrlRef so back-button save targets the right video
           manifestUrlRef.current = boundary.url;
 
-          // Save position every ~5 seconds so it survives unexpected interruptions
+          const relWindowIdx = windowIdx - boundary.startIdx;
+          const relativePositionMs = relWindowIdx * 1_000_000 + windowOffset;
+
           saveTickRef.current += 1;
           if (saveTickRef.current % 10 === 0) {
-            const relWindowIdx = windowIdx - boundary.startIdx;
             const chunkDurMs = boundary.count > 0 ? (boundary.duration * 1000) / boundary.count : 0;
-            const relativePositionMs = relWindowIdx * 1_000_000 + windowOffset;
             const elapsedSec = Math.floor((relWindowIdx * chunkDurMs + windowOffset) / 1000);
             saveWatchState(boundary.url, {
               completed: false,
@@ -267,14 +249,19 @@ export default function PlayScreen() {
             }).catch(() => {});
           }
 
-          // Compute elapsed for current video only
-          const relWindowIdx = windowIdx - boundary.startIdx;
-          const chunkDurMs = boundary.count > 0 ? (boundary.duration * 1000) / boundary.count : 0;
-          const elapsed = Math.floor((relWindowIdx * chunkDurMs + windowOffset) / 1000);
-          setElapsedSeconds(elapsed);
-          setTotalDuration(boundary.duration);
-          if (!isSeeking && boundary.duration > 0) {
-            setScrubFraction(elapsed / boundary.duration);
+          // For live mode, use getElapsedMs() since duration_seconds is 0 while recording.
+          // For recorded videos, derive from boundary to stay relative to the current video.
+          if (isLiveRef.current) {
+            const elapsedMs = await playerRef.current?.getElapsedMs() ?? 0;
+            setElapsedSeconds(Math.floor(elapsedMs / 1000));
+          } else {
+            const chunkDurMs = boundary.count > 0 ? (boundary.duration * 1000) / boundary.count : 0;
+            const elapsed = Math.floor((relWindowIdx * chunkDurMs + windowOffset) / 1000);
+            setElapsedSeconds(elapsed);
+            setTotalDuration(boundary.duration);
+            if (!isSeeking && boundary.duration > 0) {
+              setScrubFraction(elapsed / boundary.duration);
+            }
           }
         }
       } catch {}
@@ -287,33 +274,20 @@ export default function PlayScreen() {
     };
   }, [loadState, paused, isSeeking, findBoundary]);
 
-  // When app returns to foreground, re-sync live video:
-  // - restart polling if it was throttled in background
-  // - immediately fetch manifest to append any missed chunks
-  // - if player reached STATE_ENDED while backgrounded, appendChunks will resume it
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (nextState) => {
       if (nextState !== 'active') return;
       if (!isLiveRef.current || !liveManifestUrlRef.current) return;
       try {
         const manifestUrl = liveManifestUrlRef.current;
-        console.log('[Live] App foregrounded — re-syncing live manifest');
+        if (!pollTimerRef.current) startLivePolling(manifestUrl);
 
-        // Restart poll timer if it stopped
-        if (!pollTimerRef.current) {
-          startLivePolling(manifestUrl);
-        }
-
-        // Immediately fetch and append any chunks missed while backgrounded
         const manifest = await fetchPublicJson<MessageManifest>(manifestUrl);
         const loaded = loadedChunkCountRef.current;
         if (manifest.chunks.length > loaded) {
           const toAppend = manifest.chunks.slice(loaded);
-          console.log(`[Live] Foreground catch-up: appending ${toAppend.length} missed chunks`);
           await playerRef.current?.appendChunks(toAppend);
           loadedChunkCountRef.current = manifest.chunks.length;
-
-          // Update boundary count so position tracking stays accurate
           const b = videoBoundariesRef.current[0];
           if (b) b.count = manifest.chunks.length;
         }
@@ -332,7 +306,6 @@ export default function PlayScreen() {
     return () => sub.remove();
   }, [startLivePolling, stopLivePolling]);
 
-  // Handle Android hardware back button
   useEffect(() => {
     const handler = BackHandler.addEventListener('hardwareBackPress', () => {
       savePartialProgress().then(() => router.back());
@@ -341,9 +314,6 @@ export default function PlayScreen() {
     return () => handler.remove();
   }, [savePartialProgress, router]);
 
-  // Load video(s) — fetches current manifest + all remaining unwatched manifests,
-  // concatenates all chunks so the native player can play through everything
-  // without needing JS to intervene for auto-advance (critical for background playback).
   useEffect(() => {
     if (!initialManifestUrl) {
       setError('No manifest URL provided');
@@ -362,7 +332,6 @@ export default function PlayScreen() {
     completedInSessionRef.current = new Set();
     lastVideoIdxRef.current = 0;
     stopLivePolling();
-
     manifestUrlRef.current = initialManifestUrl;
 
     (async () => {
@@ -376,7 +345,6 @@ export default function PlayScreen() {
         const live = manifest.status === 'recording';
         setIsLive(live);
 
-        // Handle resume position for the starting video
         if (watchState && !watchState.completed && watchState.positionMs > 0) {
           setStartPosition(watchState.positionMs);
           const windowIndex = Math.floor(watchState.positionMs / 1_000_000);
@@ -387,7 +355,6 @@ export default function PlayScreen() {
           setElapsedSeconds(offset);
         }
 
-        // Start building the concatenated chunk list
         const allChunks = [...manifest.chunks];
         const boundaries: VideoBoundary[] = [{
           url: initialManifestUrl,
@@ -396,7 +363,6 @@ export default function PlayScreen() {
           duration: manifest.duration_seconds,
         }];
 
-        // For non-live videos, pre-fetch all remaining unwatched manifests
         if (!live) {
           const playlist = getPlaylist();
           const currentIdx = playlist.indexOf(initialManifestUrl);
@@ -408,7 +374,6 @@ export default function PlayScreen() {
               return !ws || !ws.completed;
             });
 
-            // Fetch all upcoming manifests in parallel
             const upcomingManifests = await Promise.all(
               unwatched.map((url) =>
                 fetchPublicJson<MessageManifest>(url).catch(() => null),
@@ -438,9 +403,7 @@ export default function PlayScreen() {
         isLiveRef.current = live;
         liveManifestUrlRef.current = live ? initialManifestUrl : '';
 
-        if (live) {
-          startLivePolling(initialManifestUrl);
-        }
+        if (live) startLivePolling(initialManifestUrl);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load message');
         setLoadState('error');
@@ -448,9 +411,7 @@ export default function PlayScreen() {
     })();
   }, [initialManifestUrl, startLivePolling, stopLivePolling]);
 
-  /** On source error, try to skip the bad chunk. Shows error screen only if unrecoverable. */
   const handlePlaybackError = useCallback(async (msg: string) => {
-    console.warn('[Play] Source error:', msg);
     try {
       const posMs = await playerRef.current?.getPositionMs();
       if (posMs != null) {
@@ -458,34 +419,27 @@ export default function PlayScreen() {
         const totalChunks = loadedChunkCountRef.current;
         const nextChunk = windowIdx + 1;
         if (nextChunk < totalChunks) {
-          console.log(`[Play] Skipping bad chunk ${windowIdx} → seeking to ${nextChunk}`);
           await playerRef.current?.seekToChunk(nextChunk);
-          return; // recovered — stay on playing state
+          return;
         }
       }
-    } catch (skipErr) {
-      console.warn('[Play] Skip recovery failed:', skipErr);
-    }
+    } catch {}
     setError(msg);
     setLoadState('error');
   }, []);
 
   const handlePlaybackFinished = useCallback(async () => {
     if (isLive) return;
-
-    // Mark all videos in the playlist as completed
     for (const b of videoBoundariesRef.current) {
       if (!completedInSessionRef.current.has(b.url)) {
         completedInSessionRef.current.add(b.url);
         await saveWatchState(b.url, { completed: true, positionMs: 0 });
       }
     }
-
     router.back();
   }, [router, isLive]);
 
   const handleGoBack = useCallback(async () => {
-    // Mark any fully-played videos as completed before saving partial progress
     const boundaries = videoBoundariesRef.current;
     for (let i = 0; i < lastVideoIdxRef.current; i++) {
       const url = boundaries[i]?.url;
@@ -503,7 +457,6 @@ export default function PlayScreen() {
       const elapsedMs = await playerRef.current?.getElapsedMs() ?? 0;
       const targetMs = Math.max(0, elapsedMs + deltaSeconds * 1000);
 
-      // Walk boundaries to find which video + chunk the target falls in
       const boundaries = videoBoundariesRef.current;
       let accMs = 0;
       for (const boundary of boundaries) {
@@ -527,7 +480,6 @@ export default function PlayScreen() {
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (evt) => {
-        // Capture the track's screen position at the start of each gesture
         scrubTrackRef.current?.measure((_x, _y, _w, _h, pageX) => {
           scrubBarPageXRef.current = pageX;
         });
@@ -544,7 +496,6 @@ export default function PlayScreen() {
         setScrubFraction(fraction);
         setIsSeeking(false);
 
-        // Find current boundary and seek to the right chunk
         const boundary = videoBoundariesRef.current[lastVideoIdxRef.current];
         if (!boundary || boundary.count === 0) return;
 
@@ -555,9 +506,7 @@ export default function PlayScreen() {
           if (pausedRef.current) playerRef.current?.pause();
         } catch {}
       },
-      onPanResponderTerminate: () => {
-        setIsSeeking(false);
-      },
+      onPanResponderTerminate: () => setIsSeeking(false),
     }),
   ).current;
 
@@ -573,10 +522,7 @@ export default function PlayScreen() {
             liveMode={isLive}
             onPlaybackFinished={handlePlaybackFinished}
             onPlaybackError={handlePlaybackError}
-            onLiveCaughtUp={() => {
-              speedRef.current = 1;
-              setSpeed(1);
-            }}
+            onLiveCaughtUp={() => { speedRef.current = 1; setSpeed(1); }}
           />
         </Pressable>
       )}
@@ -628,7 +574,7 @@ export default function PlayScreen() {
             </View>
           </View>
           <NotesOverlay
-            threadId={threadId}
+            threadId={convId}
             visible={notesVisible}
             onToggle={() => setNotesVisible((v) => !v)}
           />
@@ -710,23 +656,11 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 4,
   },
-  liveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#fff',
-  },
-  liveText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' },
+  liveText: { color: '#fff', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
   scrubberContainer: {
     position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+    bottom: 0, left: 0, right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
@@ -735,48 +669,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
     zIndex: 10,
   },
-  skipBtn: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 48,
-    paddingVertical: 4,
-  },
-  skipIcon: {
-    color: '#fff',
-    fontSize: 22,
-    lineHeight: 24,
-  },
-  skipLabel: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700',
-    marginTop: -2,
-  },
-  scrubberTrack: {
-    flex: 1,
-    height: 56, // large touch target; thumb top = (56 - thumbSize) / 2
-    justifyContent: 'center',
-  },
-  scrubberTrackInner: {
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    borderRadius: 2,
-  },
-  scrubberFill: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    height: 4,
-    backgroundColor: '#fff',
-    borderRadius: 2,
-  },
-  scrubberThumb: {
-    position: 'absolute',
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#fff',
-    top: 21, // (56 - 14) / 2 — centers the dot on the 4px bar
-    left: 0,
-  },
+  skipBtn: { alignItems: 'center', justifyContent: 'center', width: 48, paddingVertical: 4 },
+  skipIcon: { color: '#fff', fontSize: 22, lineHeight: 24 },
+  skipLabel: { color: '#fff', fontSize: 10, fontWeight: '700', marginTop: -2 },
+  scrubberTrack: { flex: 1, height: 56, justifyContent: 'center' },
+  scrubberTrackInner: { height: 4, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 2 },
+  scrubberFill: { position: 'absolute', left: 0, top: 0, height: 4, backgroundColor: '#fff', borderRadius: 2 },
+  scrubberThumb: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: '#fff', top: 21, left: 0 },
 });

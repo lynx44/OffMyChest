@@ -1,89 +1,78 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useState } from 'react';
 
-import { POLLING_INTERVAL_MS, STORAGE_KEYS } from '../shared/constants';
-import { Outbox, ThreadOutbox, OutboxEntry } from '../shared/types';
+import { POLLING_INTERVAL_MS } from '../shared/constants';
+import { ConversationOutbox, OutboxEntry } from '../shared/types';
 import { fetchPublicJson } from '../storage/driveApi';
+import {
+  getConversation,
+  addMemberToConversation,
+  updateConversationLastMessage,
+} from '../conversations/conversationStore';
 
 export interface ConversationMessage extends OutboxEntry {
   fromMe: boolean;
 }
 
-/** base64url-encode a string (URL-safe, no padding) */
-function encodeThreadId(url: string): string {
-  return btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-/**
- * Fetches and merges messages for a conversation:
- *   - My messages to the contact  (from my per-thread outbox)
- *   - Their messages to me        (from their per-thread outbox, discovered via their root outbox)
- *
- * Polls on POLLING_INTERVAL_MS and re-fetches when `refresh()` is called.
- */
-export function useConversationMessages(
-  userSub: string,
-  contactOutboxUrl: string,
-  /** The threadId URL param (= encodeThreadId(contactOutboxUrl)) */
-  threadId: string,
-) {
+export function useConversationMessages(userSub: string, userEmail: string, convId: string) {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchMessages = useCallback(async () => {
     try {
-      const myOutboxUrl = await AsyncStorage.getItem(
-        STORAGE_KEYS.driveOutboxPublicUrl(userSub),
-      );
+      const conv = await getConversation(userSub, convId);
+      if (!conv) {
+        setMessages([]);
+        setError(null);
+        setLoading(false);
+        return;
+      }
 
-      // The key the contact uses to look up their messages from me in my threads map.
-      // = base64url(contactOutboxUrl) = the route threadId param.
-      // The key I use to look up messages from them in their threads map
-      // = base64url(myOutboxUrl).
-      const myThreadId = myOutboxUrl ? encodeThreadId(myOutboxUrl) : null;
+      const allMessages: ConversationMessage[] = [];
 
-      // --- Received messages ---
-      // Fetch contact's root outbox to discover the URL of their thread outbox for me
-      let received: ConversationMessage[] = [];
+      // My own messages
       try {
-        const contactRootOutbox = await fetchPublicJson<Outbox>(contactOutboxUrl);
-        const contactThreadUrl = myThreadId ? contactRootOutbox.threads?.[myThreadId] : null;
-        if (contactThreadUrl) {
-          const contactThreadOutbox = await fetchPublicJson<ThreadOutbox>(contactThreadUrl);
-          received = contactThreadOutbox.messages.map((m) => ({ ...m, fromMe: false }));
+        const myOutbox = await fetchPublicJson<ConversationOutbox>(conv.my_outbox_url);
+        for (const msg of myOutbox.messages) {
+          allMessages.push({ ...msg, fromMe: true });
         }
       } catch {
-        // Contact may not have sent anything yet — not an error
+        // Not yet written — empty
       }
 
-      // --- Sent messages ---
-      // Read from my own thread outbox for this contact (cached URL in AsyncStorage)
-      let sent: ConversationMessage[] = [];
-      const myThreadOutboxUrl = await AsyncStorage.getItem(
-        STORAGE_KEYS.myThreadOutboxUrl(threadId),
-      );
-      if (myThreadOutboxUrl) {
+      // Each known member's messages
+      for (const member of conv.members) {
         try {
-          const myThreadOutbox = await fetchPublicJson<ThreadOutbox>(myThreadOutboxUrl);
-          sent = myThreadOutbox.messages.map((m) => ({ ...m, fromMe: true }));
+          const memberOutbox = await fetchPublicJson<ConversationOutbox>(member.outbox_url);
+          for (const msg of memberOutbox.messages) {
+            allMessages.push({ ...msg, fromMe: false });
+
+            // Discover new members from sender_outbox_url in message manifests
+            // (handled separately in the conversation screen via manifest reads)
+          }
         } catch {
-          // Not yet written — empty
+          // Member may not have posted yet
         }
       }
 
-      const all = [...received, ...sent].sort(
+      const sorted = allMessages.sort(
         (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
       );
 
-      setMessages(all);
+      // Update last_message_at
+      if (sorted.length > 0) {
+        const latest = sorted[sorted.length - 1];
+        await updateConversationLastMessage(userSub, convId, latest.timestamp);
+      }
+
+      setMessages(sorted);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
     } finally {
       setLoading(false);
     }
-  }, [userSub, contactOutboxUrl, threadId]);
+  }, [userSub, userEmail, convId]);
 
   useEffect(() => {
     fetchMessages();

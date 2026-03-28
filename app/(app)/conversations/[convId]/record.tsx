@@ -23,12 +23,10 @@ import {
 } from '../../../../modules/seamless-recorder/src';
 import { NotesOverlay, NotesToggleButton } from '../../../../src/notes/NotesOverlay';
 import { getNotes } from '../../../../src/notes/notesStore';
+import { getConversation } from '../../../../src/conversations/conversationStore';
 
 export default function RecordScreen() {
-  const { threadId, groupId } = useLocalSearchParams<{
-    threadId: string;
-    groupId?: string;
-  }>();
+  const { convId } = useLocalSearchParams<{ convId: string }>();
   const { user } = useAuth();
   const adapter = useStorageAdapter();
   const router = useRouter();
@@ -42,7 +40,6 @@ export default function RecordScreen() {
   const [hasNotes, setHasNotes] = useState(false);
   const [sessionId, setSessionId] = useState(() => Crypto.randomUUID());
 
-  /** Number of background upload/finalize tasks in progress */
   const [bgUploads, setBgUploads] = useState(0);
 
   const recorderRef = useRef<SeamlessRecorderRef>(null);
@@ -51,23 +48,28 @@ export default function RecordScreen() {
   const startTimeRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Cleanup timer on unmount
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
-  // Check if thread has notes
   useEffect(() => {
-    if (threadId) {
-      getNotes(threadId).then((n) => setHasNotes(n.length > 0));
+    if (convId) {
+      getNotes(convId).then((n) => setHasNotes(n.length > 0));
     }
-  }, [threadId]);
+  }, [convId]);
 
   const handleStartRecording = useCallback(async () => {
     if (!adapter || !user) {
       setErrorMessage('Not ready — please try again.');
+      return;
+    }
+
+    // Get my outbox URL for this conversation so it can be embedded in each message
+    const conv = await getConversation(user.sub, convId);
+    if (!conv) {
+      setErrorMessage('Conversation not found.');
       return;
     }
 
@@ -77,18 +79,18 @@ export default function RecordScreen() {
 
     await saveDraft({
       message_id: messageId,
-      thread_id: threadId,
-      group_id: groupId ?? null,
+      conv_id: convId,
       started_at: new Date().toISOString(),
       chunks_uploaded: [],
       status: 'recording',
     });
 
-    uploaderRef.current = new ChunkUploader(adapter, {
-      messageId,
-      threadId,
-      groupId: groupId ?? null,
-    }, user.email);
+    uploaderRef.current = new ChunkUploader(
+      adapter,
+      { messageId, convId },
+      user.email,
+      conv.my_outbox_url,
+    );
 
     setIsRecording(true);
     setElapsedSeconds(0);
@@ -107,15 +109,13 @@ export default function RecordScreen() {
       setIsRecording(false);
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     }
-  }, [adapter, user, sessionId, threadId, groupId]);
+  }, [adapter, user, sessionId, convId]);
 
-  // Auto-start recording when the screen opens with permissions already granted
   const autoStarted = useRef(false);
   useEffect(() => {
     if (autoStarted.current) return;
     if (!adapter || !user || !permission?.granted || !micPermission?.granted) return;
     autoStarted.current = true;
-    // Brief delay so the native camera view finishes mounting before startRecording is called
     const timer = setTimeout(() => handleStartRecording(), 300);
     return () => clearTimeout(timer);
   }, [adapter, user, permission?.granted, micPermission?.granted, handleStartRecording]);
@@ -143,7 +143,6 @@ export default function RecordScreen() {
   }
 
   function handleChunkReady(event: ChunkReadyEvent) {
-    console.log(`[Record] Chunk ${event.index} ready: ${event.uri}`);
     uploaderRef.current?.enqueueChunk(event.index, event.uri);
   }
 
@@ -151,20 +150,14 @@ export default function RecordScreen() {
     console.error('[Record] Recorder error:', message);
     setErrorMessage(message);
     setIsRecording(false);
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }
 
   async function handleStopRecording() {
     if (!isRecording) return;
     setIsRecording(false);
 
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
 
     try {
       await recorderRef.current?.stopRecording();
@@ -172,24 +165,18 @@ export default function RecordScreen() {
       console.error('stopRecording failed:', err);
     }
 
-    // Wait for the final onChunkReady event to cross the native→JS bridge
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    // Capture references for background work
     const uploader = uploaderRef.current;
     const messageId = messageIdRef.current;
     const durationSeconds = Math.round((Date.now() - startTimeRef.current) / 1000);
     const email = user?.email ?? '';
 
-    // Reset immediately — each recording has its own directory (via sessionId),
-    // so the next recording's files can never overwrite the previous one's.
     uploaderRef.current = null;
     messageIdRef.current = '';
     setElapsedSeconds(0);
-    // Generate a new sessionId for the next recording
     setSessionId(Crypto.randomUUID());
 
-    // Run entire upload + finalize in background
     if (uploader && email) {
       setBgUploads((n) => n + 1);
       finalizeInBackground(uploader, messageId, durationSeconds, email);
@@ -206,11 +193,8 @@ export default function RecordScreen() {
       await updateDraftStatus(messageId, 'uploading');
       const uploadedChunks = await uploader.waitForAll();
       await uploader.finalize(uploadedChunks, durationSeconds, email);
-      console.log(`[Record] Background finalize complete for ${messageId}`);
     } catch (err: any) {
       if (err?.status === 404) {
-        // Video was deleted before finalization completed — clean up the draft and move on
-        console.log(`[Record] Video ${messageId} was deleted before finalize — clearing draft`);
         await clearDraft(messageId).catch(() => {});
       } else {
         console.error(`[Record] Background finalize failed for ${messageId}:`, err);
@@ -244,12 +228,9 @@ export default function RecordScreen() {
       />
 
       <View style={styles.overlay}>
-        {/* Top bar */}
         <View style={styles.topBar}>
           <TouchableOpacity onPress={() => router.back()}>
-            <Text style={styles.cancelText}>
-              {isRecording ? 'Cancel' : 'Done'}
-            </Text>
+            <Text style={styles.cancelText}>{isRecording ? 'Cancel' : 'Done'}</Text>
           </TouchableOpacity>
 
           <View style={styles.topRight}>
@@ -268,12 +249,11 @@ export default function RecordScreen() {
         </View>
 
         <NotesOverlay
-          threadId={threadId}
+          threadId={convId}
           visible={notesVisible}
           onToggle={() => setNotesVisible((v) => !v)}
         />
 
-        {/* Background upload indicator */}
         {bgUploads > 0 && !isRecording && (
           <View style={styles.bgUploadBanner}>
             <ActivityIndicator color="#fff" size="small" />
@@ -283,18 +263,12 @@ export default function RecordScreen() {
           </View>
         )}
 
-        {/* Bottom controls */}
         <View style={styles.bottomBar}>
           <TouchableOpacity
             style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
             onPress={isRecording ? handleStopRecording : handleStartRecording}
           >
-            <View
-              style={[
-                styles.recordBtnInner,
-                isRecording && styles.recordBtnInnerActive,
-              ]}
-            />
+            <View style={[styles.recordBtnInner, isRecording && styles.recordBtnInnerActive]} />
           </TouchableOpacity>
         </View>
       </View>
@@ -309,16 +283,8 @@ function formatDuration(seconds: number): string {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'space-between',
-  },
+  container: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
+  overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'space-between' },
   topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -337,41 +303,17 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 12,
   },
-  recordingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#FF3B30',
-  },
-  timerText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
-  },
+  recordingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF3B30' },
+  timerText: { color: '#fff', fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
   bottomBar: { alignItems: 'center', paddingBottom: 56 },
   recordBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    borderWidth: 4,
-    borderColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 72, height: 72, borderRadius: 36,
+    borderWidth: 4, borderColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
   },
   recordBtnActive: { borderColor: '#FF3B30' },
-  recordBtnInner: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#FF3B30',
-  },
-  recordBtnInnerActive: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    backgroundColor: '#FF3B30',
-  },
+  recordBtnInner: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#FF3B30' },
+  recordBtnInnerActive: { width: 28, height: 28, borderRadius: 6, backgroundColor: '#FF3B30' },
   bgUploadBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -386,11 +328,6 @@ const styles = StyleSheet.create({
   permissionText: { color: '#fff', textAlign: 'center', padding: 32, fontSize: 16 },
   cancelLink: { color: '#aaa', fontSize: 16, marginTop: 16 },
   errorText: { color: '#fff', textAlign: 'center', padding: 32, fontSize: 16 },
-  button: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 8,
-  },
+  button: { backgroundColor: '#fff', paddingHorizontal: 32, paddingVertical: 14, borderRadius: 8 },
   buttonText: { fontSize: 16, fontWeight: '600' },
 });

@@ -14,19 +14,17 @@ export default function AppLayout() {
         }}
       />
       <Tabs.Screen
-        name="contacts"
-        options={{
-          title: 'Contacts',
-          tabBarLabel: 'Contacts',
-          tabBarIcon: () => <Text>👥</Text>,
-        }}
-      />
-      <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
           tabBarLabel: 'Settings',
           tabBarIcon: () => <Text>⚙️</Text>,
+        }}
+      />
+      <Tabs.Screen
+        name="contacts"
+        options={{
+          href: null, // hidden from tab bar but routes still work
         }}
       />
     </Tabs>

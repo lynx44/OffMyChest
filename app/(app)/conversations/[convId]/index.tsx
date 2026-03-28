@@ -1,10 +1,11 @@
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   Image,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -12,18 +13,12 @@ import {
 } from 'react-native';
 
 import { useAuth } from '../../../../src/auth/GoogleAuthProvider';
-import { getContacts } from '../../../../src/contacts/contactStore';
 import { useConversationMessages, ConversationMessage } from '../../../../src/messages/useConversationMessages';
 import { setPlaylist } from '../../../../src/messages/playlistStore';
 import { getWatchStates, saveWatchState } from '../../../../src/messages/watchStateStore';
 import { useStorageAdapter } from '../../../../src/storage/useStorageAdapter';
-import { Contact } from '../../../../src/shared/types';
-
-/** Reverse base64url → original URL */
-function decodeThreadId(encoded: string): string {
-  const padded = encoded + '==='.slice((encoded.length + 3) % 4);
-  return atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
-}
+import { getConversation, LocalConversation } from '../../../../src/conversations/conversationStore';
+import { buildInviteLink } from '../new';
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -41,38 +36,55 @@ function formatDuration(seconds: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
-/** base64url-encode for passing manifest URL as a route param */
 function encodeParam(url: string): string {
   return btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 export default function ConversationScreen() {
-  const { threadId } = useLocalSearchParams<{ threadId: string }>();
+  const { convId } = useLocalSearchParams<{ convId: string }>();
   const { user } = useAuth();
   const router = useRouter();
-
+  const navigation = useNavigation();
   const adapter = useStorageAdapter();
-  const contactOutboxUrl = decodeThreadId(threadId);
+
   const { messages, loading, error, refresh } = useConversationMessages(
     user?.sub ?? '',
-    contactOutboxUrl,
-    threadId,
+    user?.email ?? '',
+    convId,
   );
 
-  const [contactName, setContactName] = useState('');
-  /** 'watched' = completed, 'partial' = started but not finished, undefined = unwatched */
+  const [conv, setConv] = useState<LocalConversation | null>(null);
   const [watchedMap, setWatchedMap] = useState<Map<string, 'watched' | 'partial'>>(new Map());
 
-  // Load contact name
   useEffect(() => {
     if (!user) return;
-    getContacts(user.sub).then((contacts) => {
-      const match = contacts.find((c: Contact) => c.outbox_url === contactOutboxUrl);
-      if (match) setContactName(match.name);
-    });
-  }, [user, contactOutboxUrl]);
+    getConversation(user.sub, convId).then((c) => { if (c) setConv(c); });
+  }, [user, convId]);
 
-  // Load watch states whenever messages change or screen regains focus
+  // Share invite link from header
+  useEffect(() => {
+    if (!conv || !user) return;
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity onPress={handleInvite} style={{ paddingHorizontal: 16 }}>
+          <Text style={{ color: '#007AFF', fontSize: 15, fontWeight: '600' }}>Invite</Text>
+        </TouchableOpacity>
+      ),
+    });
+  }, [conv, user, navigation]);
+
+  function handleInvite() {
+    if (!conv || !user) return;
+    const link = buildInviteLink({
+      convId: conv.conv_id,
+      convName: conv.name,
+      outboxUrl: conv.my_outbox_url,
+      fromName: user.name,
+      fromEmail: user.email,
+    });
+    Share.share({ message: `Join me on Off My Chest!\n\n${link}` });
+  }
+
   const refreshWatchStates = useCallback(async () => {
     if (messages.length === 0) return;
     const states = await getWatchStates(messages.map((m) => m.manifest_url));
@@ -85,13 +97,10 @@ export default function ConversationScreen() {
     setWatchedMap(map);
   }, [messages]);
 
-  // Refresh watch states when messages change (e.g. new message arrives via polling)
   useEffect(() => { refreshWatchStates(); }, [refreshWatchStates]);
 
-  // Refresh messages + watch states when screen comes back into focus
   useFocusEffect(useCallback(() => { refresh(); refreshWatchStates(); }, [refresh, refreshWatchStates]));
 
-  // Autoplay on first load: pick the right video based on watch history
   const autoplayDone = useRef(false);
   useEffect(() => {
     if (loading || autoplayDone.current || messages.length === 0) return;
@@ -101,11 +110,9 @@ export default function ConversationScreen() {
       const urls = messages.map((m) => m.manifest_url);
       const states = await getWatchStates(urls);
 
-      // If the latest video has been watched, just show the thread view
       const latestState = states.get(messages[messages.length - 1].manifest_url);
       if (latestState?.completed) return;
 
-      // Priority 1: last partially-watched video (most recently watched incomplete)
       let partial: ConversationMessage | null = null;
       let partialTime = '';
       for (const msg of messages) {
@@ -119,7 +126,6 @@ export default function ConversationScreen() {
       }
       if (partial) { handlePlay(partial); return; }
 
-      // Priority 2: first unwatched video after the last completed one
       let lastCompletedIdx = -1;
       for (let i = messages.length - 1; i >= 0; i--) {
         const ws = states.get(messages[i].manifest_url);
@@ -130,7 +136,6 @@ export default function ConversationScreen() {
         return;
       }
 
-      // Priority 3: no watch history — play the oldest (first) video
       if (states.size === 0) {
         handlePlay(messages[0]);
         return;
@@ -139,7 +144,7 @@ export default function ConversationScreen() {
   }, [loading, messages]);
 
   function handleLongPress(msg: ConversationMessage) {
-    const buttons: React.ComponentProps<typeof Alert>['buttons'] = [];
+    const buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }> = [];
 
     if (msg.fromMe) {
       buttons.push({
@@ -155,9 +160,9 @@ export default function ConversationScreen() {
                 style: 'destructive',
                 onPress: async () => {
                   try {
-                    await adapter?.deleteMessage(msg.manifest_url, msg.message_id, threadId);
+                    await adapter?.deleteMessage(msg.manifest_url, msg.message_id, convId);
                     refresh();
-                  } catch (e) {
+                  } catch {
                     Alert.alert('Error', 'Failed to delete video. Please try again.');
                   }
                 },
@@ -178,22 +183,17 @@ export default function ConversationScreen() {
     });
 
     buttons.push({ text: 'Cancel', style: 'cancel' });
-
     Alert.alert('Video Options', undefined, buttons);
   }
 
   function handlePlay(msg: ConversationMessage) {
     setPlaylist(messages.map((m) => m.manifest_url));
     const encoded = encodeParam(msg.manifest_url);
-    router.push(`/(app)/conversations/${threadId}/play?manifest=${encoded}`);
+    router.push(`/(app)/conversations/${convId}/play?manifest=${encoded}`);
   }
 
   if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator />
-      </View>
-    );
+    return <View style={styles.center}><ActivityIndicator /></View>;
   }
 
   return (
@@ -222,27 +222,20 @@ export default function ConversationScreen() {
               onLongPress={() => handleLongPress(item)}
               activeOpacity={0.8}
             >
-              {/* Thumbnail */}
               {item.thumbnail_url ? (
-                <Image
-                  source={{ uri: item.thumbnail_url }}
-                  style={styles.thumbnail}
-                  resizeMode="cover"
-                />
+                <Image source={{ uri: item.thumbnail_url }} style={styles.thumbnail} resizeMode="cover" />
               ) : (
                 <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
                   <Text style={styles.thumbnailIcon}>▶</Text>
                 </View>
               )}
 
-              {/* Play overlay */}
               <View style={styles.playOverlay}>
                 <View style={styles.playButton}>
                   <Text style={styles.playIcon}>▶</Text>
                 </View>
               </View>
 
-              {/* Watch status badge */}
               {item.status === 'recording' ? (
                 <View style={[styles.watchBadge, styles.liveBadge]}>
                   <Text style={styles.newBadgeText}>LIVE</Text>
@@ -257,7 +250,6 @@ export default function ConversationScreen() {
                 </View>
               ) : null}
 
-              {/* Meta */}
               <View style={styles.meta}>
                 <Text style={[styles.duration, item.fromMe ? styles.metaMe : styles.metaThem]}>
                   {formatDuration(item.duration_seconds)}
@@ -271,11 +263,10 @@ export default function ConversationScreen() {
         )}
       />
 
-      {/* Record button */}
       <View style={styles.toolbar}>
         <TouchableOpacity
           style={styles.recordBtn}
-          onPress={() => router.push(`/(app)/conversations/${threadId}/record`)}
+          onPress={() => router.push(`/(app)/conversations/${convId}/record`)}
         >
           <View style={styles.recordDot} />
         </TouchableOpacity>
@@ -290,37 +281,20 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f2f2f7' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { padding: 12, paddingBottom: 80 },
-
   emptyContainer: { alignItems: 'center', paddingTop: 60, gap: 8 },
   emptyText: { fontSize: 16, fontWeight: '600', color: '#333' },
   emptyHint: { fontSize: 14, color: '#888' },
-
   errorBanner: { backgroundColor: '#ffcdd2', padding: 10, alignItems: 'center' },
   errorText: { color: '#c62828', fontSize: 13 },
-
   row: { marginVertical: 4, flexDirection: 'row' },
   rowMe: { justifyContent: 'flex-end' },
   rowThem: { justifyContent: 'flex-start' },
-
-  bubble: {
-    width: 220,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
+  bubble: { width: 220, borderRadius: 16, overflow: 'hidden' },
   bubbleMe: { backgroundColor: '#007AFF' },
   bubbleThem: { backgroundColor: '#fff' },
-
-  thumbnail: {
-    width: '100%',
-    height: THUMBNAIL_HEIGHT,
-    backgroundColor: '#000',
-  },
-  thumbnailPlaceholder: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  thumbnail: { width: '100%', height: THUMBNAIL_HEIGHT, backgroundColor: '#000' },
+  thumbnailPlaceholder: { alignItems: 'center', justifyContent: 'center' },
   thumbnailIcon: { fontSize: 32, color: '#555' },
-
   playOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
@@ -328,65 +302,36 @@ const styles = StyleSheet.create({
     height: THUMBNAIL_HEIGHT,
   },
   playButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 48, height: 48, borderRadius: 24,
     backgroundColor: 'rgba(0,0,0,0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
   playIcon: { color: '#fff', fontSize: 18, marginLeft: 3 },
-
   watchBadge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
+    position: 'absolute', top: 8, right: 8,
     backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
   },
   watchBadgeText: { color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: '600' },
   newBadge: { backgroundColor: '#007AFF' },
   liveBadge: { backgroundColor: '#FF3B30' },
   newBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
-
-  meta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
+  meta: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 10, paddingVertical: 6 },
   duration: { fontSize: 13, fontWeight: '600' },
   time: { fontSize: 12 },
   metaMe: { color: 'rgba(255,255,255,0.9)' },
   metaThem: { color: '#555' },
-
   toolbar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingBottom: 32,
-    paddingTop: 12,
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    paddingBottom: 32, paddingTop: 12,
     backgroundColor: '#f2f2f7',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#ccc',
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#ccc',
     alignItems: 'center',
   },
   recordBtn: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    borderWidth: 3,
-    borderColor: '#FF3B30',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 60, height: 60, borderRadius: 30,
+    borderWidth: 3, borderColor: '#FF3B30',
+    alignItems: 'center', justifyContent: 'center',
   },
-  recordDot: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#FF3B30',
-  },
+  recordDot: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FF3B30' },
 });
