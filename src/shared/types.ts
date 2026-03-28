@@ -23,6 +23,14 @@ export interface Outbox {
   owner: string;
   owner_email: string;
   updated_at: string; // ISO 8601
+  /** Maps threadId → public URL of the per-thread outbox file */
+  threads: Record<string, string>;
+}
+
+/** Per-thread outbox — one file per contact, stored at threads/{threadId}/outbox.json */
+export interface ThreadOutbox {
+  version: '1';
+  updated_at: string;
   messages: OutboxEntry[];
 }
 

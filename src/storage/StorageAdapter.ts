@@ -1,4 +1,4 @@
-import { MessageManifest, Outbox, OutboxEntry } from '../shared/types';
+import { MessageManifest, Outbox, OutboxEntry, ThreadOutbox } from '../shared/types';
 
 /**
  * Storage provider interface.
@@ -37,16 +37,16 @@ export interface StorageAdapter {
   /** Resolve a chunk path (relative to base_url) to a full public download URL. */
   getChunkUrl(baseUrl: string, chunkPath: string): Promise<string>;
 
-  /** Append a message entry to the user's outbox.json (serialized via queue). */
+  /** Upsert a message entry into the thread-specific outbox (serialized via queue). */
   updateOutbox(entry: OutboxEntry): Promise<void>;
 
-  /** Read the current outbox.json (own user's). */
-  readOwnOutbox(): Promise<Outbox>;
+  /** Read the per-thread outbox for a given threadId. */
+  readThreadOutbox(threadId: string): Promise<ThreadOutbox>;
 
   /**
    * Delete a message the user owns:
    * - Removes the message folder (and all chunks/thumbnail/manifest) from Drive
-   * - Removes the entry from outbox.json
+   * - Removes the entry from the thread outbox
    */
-  deleteMessage(manifestUrl: string, messageId: string): Promise<void>;
+  deleteMessage(manifestUrl: string, messageId: string, threadId: string): Promise<void>;
 }

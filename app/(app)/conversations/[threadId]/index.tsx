@@ -155,7 +155,7 @@ export default function ConversationScreen() {
                 style: 'destructive',
                 onPress: async () => {
                   try {
-                    await adapter?.deleteMessage(msg.manifest_url, msg.message_id);
+                    await adapter?.deleteMessage(msg.manifest_url, msg.message_id, threadId);
                     refresh();
                   } catch (e) {
                     Alert.alert('Error', 'Failed to delete video. Please try again.');
