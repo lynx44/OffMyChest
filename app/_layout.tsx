@@ -63,7 +63,10 @@ function AuthGate() {
     function handleUrl(url: string) {
       try {
         const parsed = new URL(url);
-        if (parsed.hostname === 'join') {
+        // Handle both offmychest://join and https://offmychest.org/join
+        const isCustomScheme = parsed.hostname === 'join';
+        const isAppLink = parsed.hostname === 'offmychest.org' && parsed.pathname === '/join';
+        if (isCustomScheme || isAppLink) {
           const conv = parsed.searchParams.get('conv');
           const outbox = parsed.searchParams.get('outbox');
           const name = parsed.searchParams.get('name');

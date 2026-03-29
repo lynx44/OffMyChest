@@ -15,7 +15,8 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.pnwtechexperts.offmychest",
+      "bundleIdentifier": "org.offmychest.app",
+      "associatedDomains": ["applinks:offmychest.org"],
       "infoPlist": {
         "NSCameraUsageDescription": "Off My Chest needs camera access to record video messages.",
         "NSMicrophoneUsageDescription": "Off My Chest needs microphone access to record video messages.",
@@ -24,7 +25,7 @@
       }
     },
     "android": {
-      "package": "com.pnwtechexperts.offmychest",
+      "package": "org.offmychest.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -37,6 +38,20 @@
         "android.permission.INTERNET",
         "android.permission.READ_CONTACTS",
         "android.permission.SEND_SMS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "offmychest.org",
+              "pathPrefix": "/join"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
       ]
     },
     "web": {

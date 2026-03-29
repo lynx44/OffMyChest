@@ -390,7 +390,7 @@ export function buildInviteLink(params: {
 }): string {
   const encoded = btoa(params.outboxUrl).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   return (
-    `offmychest://join` +
+    `https://offmychest.org/join` +
     `?conv=${encodeURIComponent(params.convId)}` +
     `&outbox=${encoded}` +
     `&name=${encodeURIComponent(params.convName)}` +
